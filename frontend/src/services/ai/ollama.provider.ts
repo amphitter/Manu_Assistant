@@ -3,11 +3,11 @@ import ollama from "ollama";
 import { AIProvider } from "./provider";
 import {
   AIModel,
-  AIMessage,
   ChatCompletionRequest,
 } from "./types";
 
 export class OllamaProvider implements AIProvider {
+
   async chat(request: ChatCompletionRequest): Promise<string> {
     const response = await ollama.chat({
       model: request.model,
@@ -18,7 +18,10 @@ export class OllamaProvider implements AIProvider {
     return response.message.content;
   }
 
-  async *stream(request: ChatCompletionRequest): AsyncGenerator<string> {
+  async *stream(
+    request: ChatCompletionRequest
+  ): AsyncGenerator<string> {
+
     const stream = await ollama.chat({
       model: request.model,
       messages: request.messages,
@@ -31,10 +34,10 @@ export class OllamaProvider implements AIProvider {
   }
 
   async listModels(): Promise<AIModel[]> {
-    const response = await ollama.list();
+    const models = await ollama.list();
 
-    return response.models.map((model) => ({
-      name: model.model,
+    return models.models.map((m) => ({
+      name: m.model,
     }));
   }
 

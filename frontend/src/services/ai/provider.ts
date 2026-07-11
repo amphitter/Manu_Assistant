@@ -1,4 +1,4 @@
-import { AIModel, ChatCompletionRequest } from "./types";
+import { ChatCompletionRequest, AIModel } from "./types";
 
 export interface AIProvider {
   chat(request: ChatCompletionRequest): Promise<string>;
