@@ -1,36 +1,62 @@
+"use client";
+
+import { useState } from "react";
+
 import {
-    MessageSquare,
-    FolderOpen,
-    Settings
+  ChevronDown,
+  ChevronRight,
+  FolderOpen,
+  MessageSquare,
+  Settings,
 } from "lucide-react";
 
-const items = [
-    {
-        icon: MessageSquare,
-        title: "New Chat",
-    },
-    {
-        icon: FolderOpen,
-        title: "Workspace",
-    },
-    {
-        icon: Settings,
-        title: "Settings",
-    },
-];
+import WorkspaceExplorer from "@/features/workspace/components/WorkspaceExplorer";
 
 export default function SidebarContent() {
-    return (
-        <div className="flex flex-col gap-2 p-3">
-            {items.map((item) => (
-                <button
-                    key={item.title}
-                    className="flex items-center gap-3 rounded-lg px-3 py-3 transition hover:bg-zinc-800"
-                >
-                    <item.icon size={18} />
-                    {item.title}
-                </button>
-            ))}
+  const [workspaceOpen, setWorkspaceOpen] =
+    useState(true);
+
+  return (
+    <div className="flex h-full flex-col">
+
+      {/* New Chat */}
+
+      <button className="flex items-center gap-3 rounded-lg px-3 py-3 transition hover:bg-zinc-800">
+        <MessageSquare size={18} />
+        <span>New Chat</span>
+      </button>
+
+      {/* Workspace */}
+
+      <button
+        onClick={() =>
+          setWorkspaceOpen(!workspaceOpen)
+        }
+        className="mt-2 flex items-center gap-2 rounded-lg px-3 py-3 transition hover:bg-zinc-800"
+      >
+        {workspaceOpen ? (
+          <ChevronDown size={16} />
+        ) : (
+          <ChevronRight size={16} />
+        )}
+
+        <FolderOpen size={18} />
+
+        <span>Workspace</span>
+      </button>
+
+      {workspaceOpen && (
+        <div className="ml-3 mt-2">
+          <WorkspaceExplorer />
         </div>
-    );
+      )}
+
+      {/* Settings */}
+
+      <button className="mt-auto flex items-center gap-3 rounded-lg px-3 py-3 transition hover:bg-zinc-800">
+        <Settings size={18} />
+        <span>Settings</span>
+      </button>
+    </div>
+  );
 }
