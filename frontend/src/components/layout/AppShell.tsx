@@ -1,14 +1,28 @@
+"use client";
+
+import { useEffect } from "react";
+
 import Sidebar from "../sidebar/Sidebar";
 import MainLayout from "./MainLayout";
 
+import WorkspaceDialog from "@/features/workspace/components/WorkspaceDialog";
+import { useWorkspaceStore } from "@/features/workspace/store/workspace.store";
+
 export default function AppShell() {
-    return (
-        <div className="flex h-screen">
+  const initialize = useWorkspaceStore((s) => s.initialize);
 
-            <Sidebar />
+  useEffect(() => {
+    initialize();
+  }, [initialize]);
 
-            <MainLayout />
+  return (
+    <>
+      <div className="flex h-screen overflow-hidden">
+        <Sidebar />
+        <MainLayout />
+      </div>
 
-        </div>
-    );
+      <WorkspaceDialog />
+    </>
+  );
 }

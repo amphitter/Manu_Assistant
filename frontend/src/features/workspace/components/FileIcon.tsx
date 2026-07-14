@@ -7,17 +7,14 @@ interface Props {
   expanded?: boolean;
 }
 
-export default function FileIcon({
-  type,
-  expanded = false,
-}: Props) {
+export default function FileIcon({ type, expanded = false }: Props) {
   if (type === "file") {
-    return <File size={16} className="shrink-0" />;
+    return <File size={14} className="shrink-0 text-zinc-500" />;
   }
 
   return expanded ? (
-    <FolderOpen size={16} className="shrink-0 text-yellow-400" />
+    <FolderOpen size={14} className="shrink-0 text-amber-500/70" />
   ) : (
-    <Folder size={16} className="shrink-0 text-yellow-400" />
+    <Folder size={14} className="shrink-0 text-amber-500/70" />
   );
 }

@@ -1,10 +1,16 @@
+export type CodeSymbolType =
+  | "function"
+  | "method"
+  | "constructor"
+  | "class"
+  | "interface"
+  | "type"
+  | "enum"
+  | "component"
+  | "variable";
+
 export interface CodeSymbol {
-  type:
-    | "function"
-    | "class"
-    | "interface"
-    | "type"
-    | "variable";
+  type: CodeSymbolType;
 
   name: string;
 

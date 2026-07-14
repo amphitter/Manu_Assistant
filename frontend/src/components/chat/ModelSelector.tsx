@@ -1,36 +1,43 @@
 "use client";
 
 import { useEffect } from "react";
+import { ChevronDown } from "lucide-react";
 import { useModelStore } from "@/store/model.store";
 
 export default function ModelSelector() {
-  const {
-    models,
-    selectedModel,
-    loadModels,
-    setSelectedModel,
-  } = useModelStore();
+  const { models, selectedModel, loadModels, setSelectedModel } =
+    useModelStore();
 
   useEffect(() => {
     loadModels();
   }, [loadModels]);
 
   return (
-    <select
-      value={selectedModel}
-      onChange={(e) =>
-        setSelectedModel(e.target.value)
-      }
-      className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
-    >
-      {models.map((model) => (
-        <option
-          key={model.id}
-          value={model.id}
-        >
-          {model.name}
-        </option>
-      ))}
-    </select>
+    <div className="relative inline-flex items-center">
+      <select
+        value={selectedModel}
+        aria-label="Select model"
+        onChange={(e) => setSelectedModel(e.target.value)}
+        className="
+          appearance-none cursor-pointer
+          rounded-lg border border-zinc-800 bg-zinc-900/60
+          py-2 pl-3 pr-8
+          text-sm font-medium text-zinc-200
+          transition-colors duration-150
+          hover:border-zinc-700 hover:bg-zinc-900
+          focus:outline-none focus:ring-1 focus:ring-zinc-600
+        "
+      >
+        {models.map((model) => (
+          <option key={model.id} value={model.id}>
+            {model.name}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        size={14}
+        className="pointer-events-none absolute right-2.5 text-zinc-500"
+      />
+    </div>
   );
 }

@@ -1,7 +1,8 @@
-import { filesystem } from "@/core/filesystem/local-filesystem";
 import { extractor } from "@/core/parser/extractor";
 
 import { ToolResult } from "../types";
+
+const MAX_SEARCH_FILES = 5;
 
 export class ContextBuilder {
   async build(
@@ -14,6 +15,10 @@ export class ContextBuilder {
       if (!result.success) continue;
 
       switch (result.action) {
+        //-----------------------------------
+        // TREE
+        //-----------------------------------
+
         case "tree": {
           sections.push(`
 ====================
@@ -25,11 +30,17 @@ ${result.content}
           break;
         }
 
+        //-----------------------------------
+        // READ
+        //-----------------------------------
+
         case "read": {
-          const extracted = extractor.extract(
-            result.content,
-            userMessage
-          );
+          const extracted =
+            extractor.extract(
+              result.content,
+              userMessage,
+              result.symbols
+            );
 
           sections.push(`
 ====================
@@ -41,48 +52,72 @@ ${extracted}
           break;
         }
 
-       case "search": {
-  const searchResults = result.searchResults ?? [];
+        //-----------------------------------
+        // SEARCH
+        //-----------------------------------
 
-  if (!searchResults.length) break;
+        case "search": {
+          const files =
+            result.searchResults ?? [];
 
-  for (const file of searchResults.slice(0, 5)) {
-    try {
-      const raw = await filesystem.readFile(file.path);
+          if (!files.length) {
+            break;
+          }
 
-      const extracted = extractor.extract(
-        raw,
-        userMessage
-      );
+          const query =
+            result.query ??
+            userMessage;
 
-      sections.push(`
+          for (const file of files.slice(0, MAX_SEARCH_FILES)) {
+            const extracted =
+              extractor.extract(
+                file.content,
+                query,
+                file.symbols
+              );
+
+            sections.push(`
 ====================
 FILE: ${file.path}
 ====================
 
 ${extracted}
 `);
-    } catch (error) {
-      console.error(error);
-    }
-  }
+          }
 
-  break;
-}
+          break;
+        }
       }
     }
 
-    if (!sections.length) return "";
+    if (!sections.length) {
+      return "";
+    }
 
-    return `
+    const context = `
 The following project context was retrieved from the workspace.
 
 Base your answer ONLY on this context.
 
-If something is not present here, explicitly say it is unavailable.
+Never say the context is unavailable if it exists below.
+
+Answer ONLY using the supplied project context.
 
 ${sections.join("\n")}
-`;
+`.trim();
+
+    console.log("\n======= CONTEXT =======");
+    console.log(
+      "Sections:",
+      sections.length
+    );
+    console.log(
+      "Characters:",
+      context.length
+    );
+    console.log("=======================\n");
+
+    return context;
   }
 }
 

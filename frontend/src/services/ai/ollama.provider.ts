@@ -6,34 +6,75 @@ import {
   ChatCompletionRequest,
 } from "./types";
 
-export class OllamaProvider implements AIProvider {
+export class OllamaProvider
+  implements AIProvider
+{
+  async chat(
+    request: ChatCompletionRequest
+  ): Promise<string> {
+    try {
+      const response = await ollama.chat({
+        model: request.model,
+        stream: false,
 
-  async chat(request: ChatCompletionRequest): Promise<string> {
-    const response = await ollama.chat({
-      model: request.model,
-      messages: request.messages,
-      stream: false,
-    });
+        options: {
+          temperature: 0.2,
+        },
 
-    return response.message.content;
+        messages: request.messages,
+      });
+
+      return response.message.content;
+    } catch (error) {
+      console.error(
+        "Ollama Chat Error:",
+        error
+      );
+
+      throw error;
+    }
   }
 
   async *stream(
     request: ChatCompletionRequest
   ): AsyncGenerator<string> {
+    try {
+      console.time("llm");
 
-    const stream = await ollama.chat({
-      model: request.model,
-      messages: request.messages,
-      stream: true,
-    });
+      const stream = await ollama.chat({
+        model: request.model,
+        stream: true,
 
-    for await (const chunk of stream) {
-      yield chunk.message.content;
+        options: {
+          temperature: 0.2,
+        },
+
+        messages: request.messages,
+      });
+
+      console.timeEnd("llm");
+
+      for await (const chunk of stream) {
+        const token =
+          chunk.message.content ?? "";
+
+        if (!token) continue;
+
+        yield token;
+      }
+    } catch (error) {
+      console.error(
+        "Streaming Error:",
+        error
+      );
+
+      throw error;
     }
   }
 
-  async listModels(): Promise<AIModel[]> {
+  async listModels(): Promise<
+    AIModel[]
+  > {
     const models = await ollama.list();
 
     return models.models.map((m) => ({

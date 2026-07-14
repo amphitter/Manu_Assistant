@@ -11,33 +11,82 @@ export class CodeParser {
         type: "function",
         regex:
           /(export\s+)?(async\s+)?function\s+([A-Za-z0-9_]+)/,
+        index: 3,
       },
+
       {
         type: "function",
         regex:
           /(export\s+)?const\s+([A-Za-z0-9_]+)\s*=\s*(async\s*)?\(/,
+        index: 2,
       },
+
       {
         type: "function",
         regex:
-          /(export\s+)?const\s+([A-Za-z0-9_]+)\s*=\s*(async\s*)?.*=>/,
+          /(export\s+)?const\s+([A-Za-z0-9_]+)\s*=.*=>/,
+        index: 2,
       },
+
       {
         type: "class",
         regex:
           /(export\s+)?class\s+([A-Za-z0-9_]+)/,
+        index: 2,
       },
+
       {
         type: "interface",
         regex:
           /interface\s+([A-Za-z0-9_]+)/,
+        index: 1,
       },
+
       {
         type: "type",
         regex:
           /type\s+([A-Za-z0-9_]+)/,
+        index: 1,
+      },
+
+      {
+        type: "method",
+        regex:
+          /^\s*(public|private|protected)?\s*(static\s+)?(async\s+)?([A-Za-z0-9_]+)\s*\(/,
+        index: 4,
+      },
+
+      {
+        type: "method",
+        regex:
+          /^\s*(public|private|protected)?\s*async\s*\*\s*([A-Za-z0-9_]+)\s*\(/,
+        index: 2,
+      },
+
+      {
+        type: "constructor",
+        regex:
+          /^\s*constructor\s*\(/,
+        index: -1,
       },
     ];
+
+    const ignore = new Set([
+      "if",
+      "for",
+      "while",
+      "switch",
+      "catch",
+      "map",
+      "filter",
+      "reduce",
+      "find",
+      "some",
+      "every",
+      "set",
+      "get",
+      "return",
+    ]);
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -48,19 +97,56 @@ export class CodeParser {
         if (!match) continue;
 
         const name =
-          match[3] ??
-          match[2] ??
-          match[1];
+          pattern.index === -1
+            ? "constructor"
+            : match[pattern.index];
 
         if (!name) continue;
+
+        if (ignore.has(name)) {
+          break;
+        }
+
+        let start = i;
+        let end = i;
+
+        let braces = 0;
+        let started = false;
+
+        for (let j = i; j < lines.length; j++) {
+          const current = lines[j];
+
+          for (const ch of current) {
+            if (ch === "{") {
+              braces++;
+              started = true;
+            }
+
+            if (ch === "}") {
+              braces--;
+            }
+          }
+
+          if (started && braces === 0) {
+            end = j;
+            break;
+          }
+        }
+
+        if (end <= start) {
+          end = Math.min(
+            lines.length - 1,
+            start + 25
+          );
+        }
 
         symbols.push({
           type: pattern.type as any,
           name,
-          start: i,
-          end: Math.min(lines.length - 1, i + 120),
+          start,
+          end,
           code: lines
-            .slice(i, i + 120)
+            .slice(start, end + 1)
             .join("\n"),
         });
 
@@ -72,5 +158,4 @@ export class CodeParser {
   }
 }
 
-export const codeParser =
-  new CodeParser();
+export const codeParser = new CodeParser();
