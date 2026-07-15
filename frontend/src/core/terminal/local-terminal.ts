@@ -1,75 +1,124 @@
-import { exec } from "child_process";
-import { promisify } from "util";
+import { spawn } from "child_process";
 
 import { workspace } from "../filesystem/workspace";
+
+import { processManager } from "./ProcessManager";
+import { terminalHistory } from "./TerminalHistory";
+import { shellDetector } from "./ShellDetector";
 
 import {
   TerminalProvider,
   TerminalResult,
+  TerminalRunOptions,
 } from "./types";
-
-const execute =
-  promisify(exec);
 
 export class LocalTerminal
   implements TerminalProvider
 {
   async run(
-    command: string
+    command: string,
+    options?: TerminalRunOptions
   ): Promise<TerminalResult> {
+    const cwd =
+      options?.cwd ??
+      workspace.getRoot();
+
     const start = Date.now();
 
-    try {
-      const result =
-        await execute(command, {
-          cwd:
-            workspace.getRoot(),
+    const shell =
+      shellDetector.detect();
 
-          windowsHide: true,
+    const child = spawn(
+      shell.executable,
+      [...shell.args, command],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          ...options?.env,
+        },
+        windowsHide: true,
+      }
+    );
 
-          maxBuffer:
-            1024 *
-            1024 *
-            10,
-        });
-
-      return {
-        success: true,
-
+    const processInfo =
+      processManager.register(
+        child,
         command,
+        cwd
+      );
 
-        stdout:
-          result.stdout,
+    terminalHistory.add({
+      id: processInfo.id,
+      command,
+      cwd,
+      startedAt: Date.now(),
+    });
 
-        stderr:
-          result.stderr,
+    return new Promise(
+      (resolve) => {
+        child.on(
+          "close",
+          (code) => {
+            const exitCode =
+              code ?? 0;
 
-        exitCode: 0,
+            terminalHistory.finish(
+              processInfo.id,
+              exitCode
+            );
 
-        duration:
-          Date.now() -
-          start,
-      };
-    } catch (error: any) {
-      return {
-        success: false,
+            const logs =
+              processManager.getLogs(
+                processInfo.id
+              );
 
-        command,
+            resolve({
+              success:
+                exitCode === 0,
 
-        stdout:
-          error.stdout ?? "",
+              processId:
+                processInfo.id,
 
-        stderr:
-          error.stderr ??
-          error.message,
+              command,
 
-        exitCode:
-          error.code ?? 1,
+              stdout:
+                logs?.stdout ??
+                "",
 
-        duration:
-          Date.now() -
-          start,
-      };
-    }
+              stderr:
+                logs?.stderr ??
+                "",
+
+              exitCode,
+
+              duration:
+                Date.now() -
+                start,
+            });
+          }
+        );
+      }
+    );
+  }
+
+  async stop(
+    processId: number
+  ): Promise<boolean> {
+    return processManager.kill(
+      processId
+    );
+  }
+
+  async list() {
+    return processManager.list();
+  }
+
+  async logs(
+    processId: number
+  ) {
+    return processManager.getLogs(
+      processId
+    );
   }
 }

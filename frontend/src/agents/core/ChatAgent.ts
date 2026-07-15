@@ -81,7 +81,7 @@ export class ChatAgent {
     );
 
     // ------------------------------------
-    // Tools
+    // Execute Planner Tools
     // ------------------------------------
 
     let toolContext = "";
@@ -131,7 +131,7 @@ export class ChatAgent {
     }
 
     // ------------------------------------
-    // Build Prompt
+    // Prompt
     // ------------------------------------
 
     const messages: AgentMessage[] =
@@ -153,10 +153,6 @@ export class ChatAgent {
         messages
       );
 
-    // ------------------------------------
-    // Prompt Debug
-    // ------------------------------------
-
     console.log(
       "\n======= CHAT PROMPT ======="
     );
@@ -168,10 +164,6 @@ export class ChatAgent {
     console.log(
       "===========================\n"
     );
-
-    // ------------------------------------
-    // Prompt Stats
-    // ------------------------------------
 
     const chars =
       prompt.reduce(
@@ -204,8 +196,8 @@ export class ChatAgent {
       "==========================\n"
     );
 
-    // ------------------------------------
-    // LLM
+      // ------------------------------------
+    // LLM Streaming
     // ------------------------------------
 
     console.time("LLM");
@@ -216,8 +208,21 @@ export class ChatAgent {
           request.model,
         messages: prompt,
       })) {
+        // Stream directly to the client
         yield token;
       }
+    } catch (error) {
+      console.error(
+        "\n======= CHAT ERROR ======="
+      );
+
+      console.error(error);
+
+      console.log(
+        "==========================\n"
+      );
+
+      yield "\n\n❌ Failed to generate response.";
     } finally {
       console.timeEnd(
         "LLM"

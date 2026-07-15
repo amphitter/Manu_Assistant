@@ -3,7 +3,6 @@ import { Geist, Geist_Mono, Instrument_Serif } from "next/font/google";
 import "./globals.css";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import "@/core/terminal";
 const geistSans = Geist({
   variable: "--font-sans",
   subsets: ["latin"],

@@ -1,9 +1,12 @@
+import { LocalTerminal } from "./local-terminal";
 import { TerminalProvider } from "./types";
 
-export let terminal: TerminalProvider;
+/**
+ * Global singleton terminal instance.
+ *
+ * This removes the need for runtime registration and prevents:
+ * "Cannot read properties of undefined (reading 'run')"
+ */
 
-export function registerTerminal(
-  provider: TerminalProvider
-) {
-  terminal = provider;
-}
+export const terminal: TerminalProvider =
+  new LocalTerminal();

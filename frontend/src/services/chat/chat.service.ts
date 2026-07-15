@@ -2,62 +2,160 @@ import { MessageRole } from "@/types/chat";
 
 export interface AIMessage {
   role: MessageRole;
+
   content: string;
+}
+
+export interface StreamEvent {
+  type:
+    | "assistant"
+    | "terminal"
+    | "system";
+
+  data: any;
 }
 
 export interface StreamOptions {
   model?: string;
+
   messages: AIMessage[];
-  onToken: (token: string) => void;
+
+  onEvent(
+    event: StreamEvent
+  ): void;
 }
 
 export class ChatService {
   async streamMessage({
     model = "qwen3:4b",
     messages,
-    onToken,
+    onEvent,
   }: StreamOptions): Promise<void> {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-      }),
-    });
+    const response =
+      await fetch(
+        "/api/chat",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+
+          body: JSON.stringify({
+            model,
+            messages,
+          }),
+        }
+      );
 
     if (!response.ok) {
-      throw new Error(`Request failed (${response.status})`);
+      throw new Error(
+        `Request failed (${response.status})`
+      );
     }
 
     if (!response.body) {
-      throw new Error("Response body is empty.");
+      throw new Error(
+        "Response body is empty."
+      );
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+    const reader =
+      response.body.getReader();
+
+    const decoder =
+      new TextDecoder();
+
+    let buffer = "";
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const {
+          done,
+          value,
+        } = await reader.read();
 
-        if (done) break;
+        if (done) {
+          break;
+        }
 
-        onToken(decoder.decode(value, { stream: true }));
+        buffer += decoder.decode(
+          value,
+          {
+            stream: true,
+          }
+        );
+
+        const lines =
+          buffer.split("\n");
+
+        buffer =
+          lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed =
+            line.trim();
+
+          if (!trimmed) {
+            continue;
+          }
+
+          try {
+            const event: StreamEvent =
+              JSON.parse(
+                trimmed
+              );
+
+            onEvent(event);
+          } catch {
+            onEvent({
+              type:
+                "assistant",
+
+              data: trimmed,
+            });
+          }
+        }
       }
 
-      // Flush remaining buffered bytes
-      const remaining = decoder.decode();
+      const remaining =
+        decoder.decode();
 
       if (remaining) {
-        onToken(remaining);
+        buffer += remaining;
       }
+
+      if (buffer.trim()) {
+        try {
+          const event: StreamEvent =
+            JSON.parse(
+              buffer.trim()
+            );
+
+          onEvent(event);
+        } catch {
+          onEvent({
+            type:
+              "assistant",
+
+            data:
+              buffer.trim(),
+          });
+        }
+      }
+    } catch (error) {
+      console.error(
+        "[ChatService]",
+        error
+      );
+
+      throw error;
     } finally {
       reader.releaseLock();
     }
   }
 }
 
-export const chatService = new ChatService();
+export const chatService =
+  new ChatService();

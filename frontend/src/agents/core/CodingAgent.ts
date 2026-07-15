@@ -182,7 +182,9 @@ export class CodingAgent {
           codePlan.message,
       });
 
-      // Nothing left to execute
+      // ------------------------------------
+      // Finished?
+      // ------------------------------------
 
       if (
         !codePlan.toolCalls.length
@@ -191,7 +193,7 @@ export class CodingAgent {
       }
 
       // ------------------------------------
-      // Execute Filesystem Operations
+      // Execute Tool Calls (Streaming Ready)
       // ------------------------------------
 
       const execution =
@@ -210,7 +212,7 @@ export class CodingAgent {
         content: context,
       });
 
-      // ------------------------------------
+          // ------------------------------------
       // Automatic Build
       // ------------------------------------
 
@@ -243,7 +245,8 @@ export class CodingAgent {
           build.summary,
           "",
           ...build.results.map(
-            (r) => r.content
+            (result) =>
+              result.content
           ),
         ].join("\n");
 
@@ -254,7 +257,7 @@ export class CodingAgent {
       });
 
       // ------------------------------------
-      // Success
+      // Build Successful
       // ------------------------------------
 
       if (build.success) {
@@ -262,17 +265,38 @@ export class CodingAgent {
           "\n✅ BUILD SUCCESS\n"
         );
 
-        return (
-          codePlan.message +
-          "\n\n✅ Build passed successfully."
-        );
+        return [
+          codePlan.message,
+          "",
+          "✅ Build passed successfully.",
+        ].join("\n");
       }
+
+      // ------------------------------------
+      // Build Failed
+      // Feed compiler errors back to the LLM
+      // ------------------------------------
 
       console.log(
         "\n❌ BUILD FAILED\n"
       );
 
-      // Loop continues automatically
+      conversation.push({
+        role: "system",
+        content: `
+The project failed to build.
+
+Analyze the compiler errors.
+
+Fix ONLY the necessary files.
+
+Do NOT rewrite unrelated files.
+
+Continue until the build succeeds.
+
+${buildContext}
+`,
+      });
     }
 
     return "Maximum coding iterations reached before achieving a successful build.";

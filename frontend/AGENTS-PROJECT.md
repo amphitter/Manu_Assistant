@@ -329,7 +329,7 @@ export class ChatAgent {
     );
 
     // ------------------------------------
-    // Tools
+    // Execute Planner Tools
     // ------------------------------------
 
     let toolContext = "";
@@ -379,7 +379,7 @@ export class ChatAgent {
     }
 
     // ------------------------------------
-    // Build Prompt
+    // Prompt
     // ------------------------------------
 
     const messages: AgentMessage[] =
@@ -401,10 +401,6 @@ export class ChatAgent {
         messages
       );
 
-    // ------------------------------------
-    // Prompt Debug
-    // ------------------------------------
-
     console.log(
       "\n======= CHAT PROMPT ======="
     );
@@ -416,10 +412,6 @@ export class ChatAgent {
     console.log(
       "===========================\n"
     );
-
-    // ------------------------------------
-    // Prompt Stats
-    // ------------------------------------
 
     const chars =
       prompt.reduce(
@@ -452,8 +444,8 @@ export class ChatAgent {
       "==========================\n"
     );
 
-    // ------------------------------------
-    // LLM
+      // ------------------------------------
+    // LLM Streaming
     // ------------------------------------
 
     console.time("LLM");
@@ -464,8 +456,21 @@ export class ChatAgent {
           request.model,
         messages: prompt,
       })) {
+        // Stream directly to the client
         yield token;
       }
+    } catch (error) {
+      console.error(
+        "\n======= CHAT ERROR ======="
+      );
+
+      console.error(error);
+
+      console.log(
+        "==========================\n"
+      );
+
+      yield "\n\n❌ Failed to generate response.";
     } finally {
       console.timeEnd(
         "LLM"
@@ -487,15 +492,25 @@ FILE: agents\core\Coder.ts
 import ollama from "ollama";
 
 import { CODER_PROMPT } from "../prompts/coder.prompt";
-import { AgentMessage, ToolCall } from "../types";
+import {
+  AgentMessage,
+  ToolCall,
+} from "../types";
 
-const CODER_MODEL = "qwen2.5-coder:7b";
+const CODER_MODEL =
+  "qwen2.5-coder:7b";
 
 const MAX_RETRIES = 2;
 
 const TIMEOUT = 60_000;
 
+const VALID_TOOLS = new Set([
+  "filesystem",
+  "terminal",
+]);
+
 const VALID_ACTIONS = new Set([
+  // Filesystem
   "tree",
   "read",
   "search",
@@ -504,6 +519,12 @@ const VALID_ACTIONS = new Set([
   "delete",
   "rename",
   "mkdir",
+
+  // Terminal
+  "run",
+  "stop",
+  "logs",
+  "list",
 ]);
 
 export interface CodePlan {
@@ -526,44 +547,55 @@ export class Coder {
       attempt++
     ) {
       try {
-        const response = await Promise.race([
-          ollama.chat({
-            model: CODER_MODEL,
+        const response =
+          await Promise.race([
+            ollama.chat({
+              model:
+                CODER_MODEL,
 
-            stream: false,
+              stream: false,
 
-            format: "json",
+              format:
+                "json",
 
-            options: {
-              temperature: 0.1,
-              num_predict: 4096,
-            },
+              options: {
+                temperature:
+                  0.1,
 
-            messages: [
-              {
-                role: "system",
-                content: CODER_PROMPT,
+                num_predict:
+                  4096,
               },
 
-              ...messages,
-            ],
-          }),
+              messages: [
+                {
+                  role:
+                    "system",
 
-          new Promise((_, reject) =>
-            setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    "Coder timeout."
-                  )
-                ),
-              TIMEOUT
-            )
-          ),
-        ]);
+                  content:
+                    CODER_PROMPT,
+                },
+
+                ...messages,
+              ],
+            }),
+
+            new Promise(
+              (_, reject) =>
+                setTimeout(
+                  () =>
+                    reject(
+                      new Error(
+                        "Coder timeout."
+                      )
+                    ),
+                  TIMEOUT
+                )
+            ),
+          ]);
 
         let content =
-          (response as any).message
+          (response as any)
+            .message
             ?.content ?? "";
 
         console.log(
@@ -595,20 +627,21 @@ export class Coder {
         console.error(error);
 
         if (
-          attempt === MAX_RETRIES
+          attempt ===
+          MAX_RETRIES
         ) {
           console.timeEnd(
             "coder"
           );
 
-        return {
-  message:
-    "Failed to generate code plan.",
+          return {
+            message:
+              "Failed to generate code plan.",
 
-  toolCalls: [],
+            toolCalls: [],
 
-  done: true,
-};
+            done: true,
+          };
         }
       }
     }
@@ -617,14 +650,14 @@ export class Coder {
       "coder"
     );
 
-  return {
-  message:
-    "Failed to generate code plan.",
+    return {
+      message:
+        "Failed to generate code plan.",
 
-  toolCalls: [],
+      toolCalls: [],
 
-  done: true,
-};
+      done: true,
+    };
   }
 
   private clean(
@@ -635,59 +668,166 @@ export class Coder {
         /```json/gi,
         ""
       )
-      .replace(/```/g, "")
+      .replace(
+        /```/g,
+        ""
+      )
       .trim();
   }
 
- private parse(
-  text: string
-): CodePlan {
-  if (
-    !text ||
-    text === "{}"
-  ) {
-    return {
-      message: "",
-      toolCalls: [],
-      done: true,
-    };
-  }
+   private parse(
+    text: string
+  ): CodePlan {
+    if (
+      !text ||
+      text === "{}"
+    ) {
+      return {
+        message: "",
 
-  try {
-    const parsed =
-      JSON.parse(text);
+        toolCalls: [],
 
-    const toolCalls = Array.isArray(
-      parsed.toolCalls
-    )
-      ? parsed.toolCalls.filter(
-          (tool: ToolCall) =>
-            tool.tool ===
-              "filesystem" &&
-            VALID_ACTIONS.has(
-              tool.action
-            )
+        done: true,
+      };
+    }
+
+    try {
+      const parsed =
+        JSON.parse(text);
+
+      const toolCalls: ToolCall[] =
+        Array.isArray(
+          parsed.toolCalls
         )
-      : [];
+          ? parsed.toolCalls.filter(
+              (
+                tool: ToolCall
+              ) => {
+                if (
+                  !tool
+                ) {
+                  return false;
+                }
 
-    return {
-      message:
-        parsed.message ?? "",
+                if (
+                  !VALID_TOOLS.has(
+                    tool.tool
+                  )
+                ) {
+                  return false;
+                }
 
-      toolCalls,
+                if (
+                  !VALID_ACTIONS.has(
+                    tool.action
+                  )
+                ) {
+                  return false;
+                }
 
-      done:
-        parsed.done ??
-        toolCalls.length === 0,
-    };
-  } catch {
-    return {
-      message: text,
-      toolCalls: [],
-      done: true,
-    };
+                // -----------------------
+                // Filesystem Validation
+                // -----------------------
+
+                if (
+                  tool.tool ===
+                  "filesystem"
+                ) {
+                  switch (
+                    tool.action
+                  ) {
+                    case "tree":
+                      return true;
+
+                    case "search":
+                      return (
+                        !!tool.query
+                      );
+
+                    case "read":
+                    case "delete":
+                    case "mkdir":
+                      return (
+                        !!tool.path
+                      );
+
+                    case "create":
+                    case "write":
+                      return (
+                        !!tool.path
+                      );
+
+                    case "rename":
+                      return (
+                        !!tool.path &&
+                        !!tool.newPath
+                      );
+
+                    default:
+                      return false;
+                  }
+                }
+
+                // -----------------------
+                // Terminal Validation
+                // -----------------------
+
+                if (
+                  tool.tool ===
+                  "terminal"
+                ) {
+                  switch (
+                    tool.action
+                  ) {
+                    case "run":
+                      return (
+                        !!tool.command
+                      );
+
+                    case "stop":
+                    case "logs":
+                      return (
+                        typeof tool.processId ===
+                        "number"
+                      );
+
+                    case "list":
+                      return true;
+
+                    default:
+                      return false;
+                  }
+                }
+
+                return false;
+              }
+            )
+          : [];
+
+      return {
+        message:
+          parsed.message ??
+          "",
+
+        toolCalls,
+
+        done:
+          typeof parsed.done ===
+          "boolean"
+            ? parsed.done
+            : toolCalls.length ===
+              0,
+      };
+    } catch {
+      return {
+        message: text,
+
+        toolCalls: [],
+
+        done: true,
+      };
+    }
   }
-}
 }
 
 export const coder =
@@ -884,7 +1024,9 @@ export class CodingAgent {
           codePlan.message,
       });
 
-      // Nothing left to execute
+      // ------------------------------------
+      // Finished?
+      // ------------------------------------
 
       if (
         !codePlan.toolCalls.length
@@ -893,7 +1035,7 @@ export class CodingAgent {
       }
 
       // ------------------------------------
-      // Execute Filesystem Operations
+      // Execute Tool Calls (Streaming Ready)
       // ------------------------------------
 
       const execution =
@@ -912,7 +1054,7 @@ export class CodingAgent {
         content: context,
       });
 
-      // ------------------------------------
+          // ------------------------------------
       // Automatic Build
       // ------------------------------------
 
@@ -945,7 +1087,8 @@ export class CodingAgent {
           build.summary,
           "",
           ...build.results.map(
-            (r) => r.content
+            (result) =>
+              result.content
           ),
         ].join("\n");
 
@@ -956,7 +1099,7 @@ export class CodingAgent {
       });
 
       // ------------------------------------
-      // Success
+      // Build Successful
       // ------------------------------------
 
       if (build.success) {
@@ -964,17 +1107,38 @@ export class CodingAgent {
           "\n✅ BUILD SUCCESS\n"
         );
 
-        return (
-          codePlan.message +
-          "\n\n✅ Build passed successfully."
-        );
+        return [
+          codePlan.message,
+          "",
+          "✅ Build passed successfully.",
+        ].join("\n");
       }
+
+      // ------------------------------------
+      // Build Failed
+      // Feed compiler errors back to the LLM
+      // ------------------------------------
 
       console.log(
         "\n❌ BUILD FAILED\n"
       );
 
-      // Loop continues automatically
+      conversation.push({
+        role: "system",
+        content: `
+The project failed to build.
+
+Analyze the compiler errors.
+
+Fix ONLY the necessary files.
+
+Do NOT rewrite unrelated files.
+
+Continue until the build succeeds.
+
+${buildContext}
+`,
+      });
     }
 
     return "Maximum coding iterations reached before achieving a successful build.";
@@ -991,7 +1155,11 @@ FILE: agents\core\ExecutionEngine.ts
 =====================================================
 
 ```ts
-import { ToolCall, ToolResult } from "../types";
+import {
+  ToolCall,
+  ToolResult,
+} from "../types";
+
 import { ToolExecutor } from "./ToolExecutor";
 
 export interface ExecutionResult {
@@ -1002,20 +1170,31 @@ export interface ExecutionResult {
   summary: string;
 }
 
+export interface ExecutionEvent {
+  type:
+    | "tool-start"
+    | "tool-result"
+    | "tool-error"
+    | "finished";
+
+  toolCall: ToolCall;
+
+  result?: ToolResult;
+}
+
 export class ExecutionEngine {
   private readonly executor =
     new ToolExecutor();
 
-  async execute(
+  // ------------------------------------
+  // Streaming Execution
+  // ------------------------------------
+
+  async *stream(
     toolCalls: ToolCall[]
-  ): Promise<ExecutionResult> {
+  ): AsyncGenerator<ExecutionEvent> {
     if (!toolCalls.length) {
-      return {
-        success: true,
-        results: [],
-        summary:
-          "Nothing to execute.",
-      };
+      return;
     }
 
     console.log(
@@ -1023,40 +1202,128 @@ export class ExecutionEngine {
     );
 
     console.log(
-      `Executing ${toolCalls.length} tool call(s)...`
+      `Executing ${toolCalls.length} tool(s)...`
     );
 
-    const results =
-      await this.executor.execute(
-        toolCalls
+    for (const toolCall of toolCalls) {
+      console.log(
+        `\n▶ ${toolCall.tool}:${toolCall.action}`
       );
 
-    console.dir(results, {
-      depth: null,
-    });
+      yield {
+        type: "tool-start",
+        toolCall,
+      };
+
+      try {
+        const [result] =
+          await this.executor.execute([
+            toolCall,
+          ]);
+
+        console.log(result);
+
+        yield {
+          type: "tool-result",
+          toolCall,
+          result,
+        };
+      } catch (error) {
+        console.error(error);
+
+        yield {
+          type: "tool-error",
+          toolCall,
+        };
+      }
+    }
 
     console.log(
-      "===============================\n"
+      "================================\n"
     );
+
+    yield {
+      type: "finished",
+
+      toolCall: {
+        tool: "filesystem",
+        action: "search",
+      },
+    };
+  }
+
+  // ------------------------------------
+  // Execute Everything
+  // ------------------------------------
+
+  async execute(
+    toolCalls: ToolCall[]
+  ): Promise<ExecutionResult> {
+    if (!toolCalls.length) {
+      return {
+        success: true,
+
+        results: [],
+
+        summary:
+          "Nothing to execute.",
+      };
+    }
+
+    const results: ToolResult[] =
+      [];
+
+    for await (const event of this.stream(
+      toolCalls
+    )) {
+      switch (event.type) {
+        case "tool-result":
+          if (event.result) {
+            results.push(
+              event.result
+            );
+          }
+          break;
+
+        case "tool-error":
+          results.push({
+            success: false,
+
+            tool:
+              event.toolCall.tool,
+
+            action:
+              event.toolCall.action,
+
+            content:
+              "Tool execution failed.",
+          });
+          break;
+      }
+    }
 
     const success =
       results.every(
-        (result) => result.success
+        (result) =>
+          result.success
       );
 
     const summary = results
       .map((result) => {
-        const icon = result.success
-          ? "✓"
-          : "✗";
+        const icon =
+          result.success
+            ? "✓"
+            : "✗";
 
-        return `${icon} ${result.action}`;
+        return `${icon} ${result.tool}:${result.action}`;
       })
       .join("\n");
 
     return {
       success,
+
       results,
+
       summary,
     };
   }
@@ -1525,50 +1792,78 @@ export class ToolExecutor {
       return [];
     }
 
-    const tasks = calls.map(
-      async (call): Promise<ToolResult> => {
-        const tool =
-          toolRegistry[
-            call.tool as keyof typeof toolRegistry
-          ];
-
-        if (!tool) {
-          console.warn(
-            `Unknown tool: ${call.tool}`
-          );
-
-          return {
-            success: false,
-            tool: call.tool,
-            action: call.action,
-            content: `Unknown tool "${call.tool}".`,
-          };
-        }
-
-        try {
-          return await tool.execute(
-            call
-          );
-        } catch (error) {
-          console.error(
-            `[${call.tool}]`,
-            error
-          );
-
-          return {
-            success: false,
-            tool: call.tool,
-            action: call.action,
-            content:
-              error instanceof Error
-                ? error.message
-                : "Tool execution failed.",
-          };
-        }
-      }
+    console.log(
+      "\n========== TOOL EXECUTOR =========="
     );
 
-    return Promise.all(tasks);
+    const results: ToolResult[] =
+      [];
+
+    for (const call of calls) {
+      console.log(
+        `\n▶ ${call.tool}:${call.action}`
+      );
+
+      const tool =
+        toolRegistry[
+          call.tool as keyof typeof toolRegistry
+        ];
+
+      if (!tool) {
+        console.warn(
+          `Unknown tool: ${call.tool}`
+        );
+
+        results.push({
+          success: false,
+
+          tool: call.tool,
+
+          action: call.action,
+
+          content: `Unknown tool "${call.tool}".`,
+        });
+
+        continue;
+      }
+
+      try {
+        const result =
+          await tool.execute(
+            call
+          );
+
+        console.log(result);
+
+        results.push(
+          result
+        );
+      } catch (error) {
+        console.error(
+          `[${call.tool}]`,
+          error
+        );
+
+        results.push({
+          success: false,
+
+          tool: call.tool,
+
+          action: call.action,
+
+          content:
+            error instanceof Error
+              ? error.message
+              : "Tool execution failed.",
+        });
+      }
+    }
+
+    console.log(
+      "\n===================================\n"
+    );
+
+    return results;
   }
 }
 ```
@@ -1584,15 +1879,21 @@ You are AGENTS.
 
 You are a Staff Software Engineer working inside a local AI IDE.
 
-Your ONLY job is to modify the user's project.
+Your ONLY responsibility is to complete software engineering tasks autonomously.
 
 Never answer like ChatGPT.
 
-Always think like a software engineer.
+Always think step-by-step.
+
+Always use tools.
 
 --------------------------------------------------
-Available filesystem actions
+Available Tools
 --------------------------------------------------
+
+filesystem
+
+Actions
 
 tree
 read
@@ -1603,6 +1904,15 @@ delete
 rename
 mkdir
 
+terminal
+
+Actions
+
+run
+stop
+logs
+list
+
 --------------------------------------------------
 Output Format
 --------------------------------------------------
@@ -1610,26 +1920,24 @@ Output Format
 Return ONLY valid JSON.
 
 {
-  "message":"What you are doing.",
+  "message":"Short summary",
   "done":false,
   "toolCalls":[
     {
       "tool":"filesystem",
       "action":"search",
-      "query":"sendMessage"
+      "query":"App"
     }
   ]
 }
 
 --------------------------------------------------
-Meaning of "done"
+Meaning of done
 --------------------------------------------------
 
 done = false
 
-means
-
-You still need more filesystem operations.
+More work is required.
 
 Examples
 
@@ -1637,7 +1945,9 @@ Search another file.
 
 Read another file.
 
-Create a folder.
+Run terminal command.
+
+Check logs.
 
 Write another file.
 
@@ -1645,67 +1955,21 @@ Write another file.
 
 done = true
 
-means
-
-The task is completely finished.
+Task completely finished.
 
 Example
 
 {
-  "message":"Login page updated successfully.",
+  "message":"Task completed successfully.",
   "done":true,
   "toolCalls":[]
 }
 
 --------------------------------------------------
-Rules
---------------------------------------------------
-
-Never invent files.
-
-Never invent frameworks.
-
-Never invent architecture.
-
-Use ONLY project context.
-
-If information is missing
-
-request
-
-search
-
-or
-
-read
-
-Never guess.
-
---------------------------------------------------
-Editing Rules
---------------------------------------------------
-
-When modifying a file
-
-Return the ENTIRE updated file.
-
-Never return patches.
-
-Never return diff.
-
-Never return partial code.
-
-Never omit imports.
-
-Never omit exports.
-
-Never omit unchanged code.
-
---------------------------------------------------
 Filesystem Rules
 --------------------------------------------------
 
-Need project structure
+Need workspace tree
 
 → tree
 
@@ -1717,7 +1981,7 @@ Need a file
 
 → read
 
-Need to modify
+Need to edit
 
 → write
 
@@ -1737,27 +2001,165 @@ Need delete
 
 → delete
 
---------------------------------------------------
-Quality Rules
---------------------------------------------------
+Never invent files.
 
-Write production-quality code.
+Never invent project structure.
 
-No TODO.
-
-No placeholder.
-
-No pseudocode.
-
-No explanations.
-
-No markdown.
+Always use existing project context.
 
 --------------------------------------------------
-Very Important
+Terminal Rules
 --------------------------------------------------
 
-If you are missing information
+Use terminal whenever code execution is required.
+
+Examples
+
+Install dependencies
+
+↓
+
+terminal.run
+
+command
+
+npm install
+
+-----------------------------------------
+
+Run development server
+
+↓
+
+terminal.run
+
+command
+
+npm run dev
+
+-----------------------------------------
+
+Run production build
+
+↓
+
+terminal.run
+
+command
+
+npm run build
+
+-----------------------------------------
+
+Run tests
+
+↓
+
+terminal.run
+
+command
+
+npm test
+
+-----------------------------------------
+
+Run python
+
+↓
+
+terminal.run
+
+command
+
+python app.py
+
+-----------------------------------------
+
+Run uvicorn
+
+↓
+
+terminal.run
+
+command
+
+uvicorn app.main:app --reload
+
+-----------------------------------------
+
+Run cargo
+
+↓
+
+terminal.run
+
+command
+
+cargo build
+
+-----------------------------------------
+
+Run go
+
+↓
+
+terminal.run
+
+command
+
+go build
+
+-----------------------------------------
+
+Need running processes
+
+↓
+
+terminal.list
+
+-----------------------------------------
+
+Need logs
+
+↓
+
+terminal.logs
+
+processId
+
+-----------------------------------------
+
+Need stop process
+
+↓
+
+terminal.stop
+
+processId
+
+--------------------------------------------------
+Editing Rules
+--------------------------------------------------
+
+When modifying a file
+
+Return the ENTIRE updated file.
+
+Never return patches.
+
+Never return diffs.
+
+Never omit unchanged code.
+
+Never omit imports.
+
+Never omit exports.
+
+--------------------------------------------------
+Autonomous Behaviour
+--------------------------------------------------
+
+If you don't have enough information
 
 DO NOT GUESS.
 
@@ -1771,19 +2173,55 @@ read
 
 operation.
 
-Continue doing this until you have enough information.
+If code should be verified
 
-Only when the task is fully completed
+Run terminal commands.
 
-return
+If build fails
+
+Read logs.
+
+Search related files.
+
+Modify files.
+
+Run build again.
+
+Repeat until the task succeeds.
+
+--------------------------------------------------
+Quality Rules
+--------------------------------------------------
+
+Always generate production-ready code.
+
+Never use TODO.
+
+Never use placeholders.
+
+Never generate incomplete implementations.
+
+Never use pseudocode.
+
+Never return markdown.
+
+Never explain.
+
+Only return JSON.
+
+--------------------------------------------------
+Completion Rule
+--------------------------------------------------
+
+Only when everything has succeeded
+
+Return
 
 {
   "message":"Task completed successfully.",
   "done":true,
   "toolCalls":[]
 }
-
-Return ONLY JSON.
 `;
 ```
 
@@ -2620,53 +3058,215 @@ import {
 } from "../types";
 
 export class TerminalTool {
-  readonly name =
-    "terminal";
+  readonly name = "terminal";
 
   async execute(
     call: ToolCall
   ): Promise<ToolResult> {
-    if (!call.command) {
-      return {
-        success: false,
+    try {
+      switch (call.action) {
+        // -----------------------------
+        // RUN
+        // -----------------------------
 
-        tool: this.name,
+        case "run": {
+          if (!call.command) {
+            return this.error(
+              call.action,
+              "Missing command."
+            );
+          }
 
-        action:
-          call.action,
+          const result =
+            await terminal.run(
+              call.command
+            );
 
-        content:
-          "Missing command.",
-      };
-    }
+          return {
+            success:
+              result.success,
 
-    const result =
-      await terminal.run(
-        call.command
-      );
+            tool: this.name,
 
-    return {
-      success:
-        result.success,
+            action:
+              call.action,
 
-      tool: this.name,
-
-      action:
-        call.action,
-
-      content: `
-Command:
+            content: `Command:
 ${result.command}
+
+Process ID:
+${result.processId ?? "N/A"}
 
 Exit Code:
 ${result.exitCode}
+
+Duration:
+${result.duration} ms
 
 STDOUT:
 ${result.stdout}
 
 STDERR:
-${result.stderr}
-`,
+${result.stderr}`,
+          };
+        }
+
+        // -----------------------------
+        // STOP
+        // -----------------------------
+
+        case "stop": {
+          if (
+            call.processId ===
+            undefined
+          ) {
+            return this.error(
+              call.action,
+              "Missing process id."
+            );
+          }
+
+          const stopped =
+            await terminal.stop?.(
+              call.processId
+            );
+
+          return {
+            success:
+              stopped ?? false,
+
+            tool: this.name,
+
+            action:
+              call.action,
+
+            content: stopped
+              ? `Process ${call.processId} stopped.`
+              : `Unable to stop process ${call.processId}.`,
+          };
+        }
+
+        // -----------------------------
+        // LIST
+        // -----------------------------
+
+        case "list": {
+          const processes =
+            await terminal.list?.();
+
+          if (
+            !processes ||
+            !processes.length
+          ) {
+            return {
+              success: true,
+
+              tool: this.name,
+
+              action:
+                call.action,
+
+              content:
+                "No active processes.",
+            };
+          }
+
+          return {
+            success: true,
+
+            tool: this.name,
+
+            action:
+              call.action,
+
+            content: processes
+              .map(
+                (process) => `
+PID: ${process.id}
+Status: ${process.status}
+Command: ${process.command}
+Directory: ${process.cwd}
+`
+              )
+              .join("\n"),
+          };
+        }
+
+        // -----------------------------
+        // LOGS
+        // -----------------------------
+
+        case "logs": {
+          if (
+            call.processId ===
+            undefined
+          ) {
+            return this.error(
+              call.action,
+              "Missing process id."
+            );
+          }
+
+          const logs =
+            await terminal.logs?.(
+              call.processId
+            );
+
+          if (!logs) {
+            return this.error(
+              call.action,
+              "Logs not found."
+            );
+          }
+
+          return {
+            success: true,
+
+            tool: this.name,
+
+            action:
+              call.action,
+
+            content: `STDOUT:
+
+${logs.stdout}
+
+-------------------------
+
+STDERR:
+
+${logs.stderr}`,
+          };
+        }
+
+        default:
+          return this.error(
+            call.action,
+            "Unknown terminal action."
+          );
+      }
+    } catch (error) {
+      console.error(error);
+
+      return this.error(
+        call.action,
+        "Terminal execution failed."
+      );
+    }
+  }
+
+  private error(
+    action: string,
+    message: string
+  ): ToolResult {
+    return {
+      success: false,
+
+      tool: this.name,
+
+      action: action as any,
+
+      content: message,
     };
   }
 }
@@ -2685,12 +3285,17 @@ import { CodeSymbol } from "@/core/parser/types";
 import { SearchResult } from "@/core/search/ranking";
 
 export interface AgentMessage {
-  role: "system" | "user" | "assistant";
+  role:
+    | "system"
+    | "user"
+    | "assistant";
+
   content: string;
 }
 
 export interface AgentRequest {
   model: string;
+
   messages: AgentMessage[];
 }
 
@@ -2703,6 +3308,10 @@ export type ToolName =
   | "terminal";
 
 export type ToolAction =
+  // -----------------------------
+  // Filesystem
+  // -----------------------------
+
   | "tree"
   | "read"
   | "search"
@@ -2711,29 +3320,51 @@ export type ToolAction =
   | "delete"
   | "rename"
   | "mkdir"
-  | "run";
+
+  // -----------------------------
+  // Terminal
+  // -----------------------------
+
+  | "run"
+  | "stop"
+  | "logs"
+  | "list";
 
 export interface ToolCall {
-  // Which tool should execute
+  // -----------------------------
+  // Tool
+  // -----------------------------
+
   tool: ToolName;
 
-  // Action for that tool
   action: ToolAction;
 
-  // Existing file/folder path
+  // -----------------------------
+  // Filesystem
+  // -----------------------------
+
   path?: string;
 
-  // Search query
   query?: string;
 
-  // Full file content (write/create)
   content?: string;
 
-  // Rename destination
   newPath?: string;
 
-  // Terminal command
+  // -----------------------------
+  // Terminal
+  // -----------------------------
+
   command?: string;
+
+  processId?: number;
+
+  cwd?: string;
+
+  env?: Record<
+    string,
+    string
+  >;
 }
 
 export interface ToolResult {
@@ -2750,6 +3381,16 @@ export interface ToolResult {
   symbols?: CodeSymbol[];
 
   searchResults?: SearchResult[];
+
+  processId?: number;
+
+  exitCode?: number;
+
+  stdout?: string;
+
+  stderr?: string;
+
+  duration?: number;
 }
 ```
 
@@ -2764,8 +3405,13 @@ import { NextRequest } from "next/server";
 import { chatAgent } from "@/agents/core/ChatAgent";
 import { codingAgent } from "@/agents/core/CodingAgent";
 
-function isCodingRequest(message: string) {
-  const text = message.toLowerCase();
+import { terminalEvents } from "@/core/terminal/TerminalEvents";
+
+function isCodingRequest(
+  message: string
+) {
+  const text =
+    message.toLowerCase();
 
   const keywords = [
     "create",
@@ -2799,8 +3445,24 @@ function isCodingRequest(message: string) {
     "refactor",
   ];
 
-  return keywords.some((word) =>
-    text.includes(word)
+  return keywords.some((k) =>
+    text.includes(k)
+  );
+}
+
+function encodeEvent(
+  encoder: TextEncoder,
+  type:
+    | "assistant"
+    | "system"
+    | "terminal",
+  data: unknown
+) {
+  return encoder.encode(
+    JSON.stringify({
+      type,
+      data,
+    }) + "\n"
   );
 }
 
@@ -2820,7 +3482,8 @@ export async function POST(
       return Response.json(
         {
           success: false,
-          error: "No message.",
+          error:
+            "No message.",
         },
         {
           status: 400,
@@ -2836,10 +3499,27 @@ export async function POST(
         async start(
           controller
         ) {
+          // --------------------------------
+          // Forward Terminal Events
+          // --------------------------------
+
+          const unsubscribe =
+            terminalEvents.onTerminal(
+              (event) => {
+                controller.enqueue(
+                  encodeEvent(
+                    encoder,
+                    "terminal",
+                    event
+                  )
+                );
+              }
+            );
+
           try {
-            // -------------------------
+            // --------------------------
             // Coding Agent
-            // -------------------------
+            // --------------------------
 
             if (
               isCodingRequest(
@@ -2847,7 +3527,15 @@ export async function POST(
               )
             ) {
               console.log(
+                "\n========== ROUTER =========="
+              );
+
+              console.log(
                 "Using CodingAgent"
+              );
+
+              console.log(
+                "============================\n"
               );
 
               const result =
@@ -2859,22 +3547,30 @@ export async function POST(
                 );
 
               controller.enqueue(
-                encoder.encode(
+                encodeEvent(
+                  encoder,
+                  "assistant",
                   result
                 )
               );
 
-              controller.close();
-
               return;
             }
 
-            // -------------------------
+            // --------------------------
             // Chat Agent
-            // -------------------------
+            // --------------------------
+
+            console.log(
+              "\n========== ROUTER =========="
+            );
 
             console.log(
               "Using ChatAgent"
+            );
+
+            console.log(
+              "============================\n"
             );
 
             for await (const token of chatAgent.chat(
@@ -2884,7 +3580,9 @@ export async function POST(
               }
             )) {
               controller.enqueue(
-                encoder.encode(
+                encodeEvent(
+                  encoder,
+                  "assistant",
                   token
                 )
               );
@@ -2895,11 +3593,17 @@ export async function POST(
             );
 
             controller.enqueue(
-              encoder.encode(
-                "\n\n❌ Internal Server Error."
+              encodeEvent(
+                encoder,
+                "system",
+                error instanceof Error
+                  ? error.message
+                  : "Internal Server Error."
               )
             );
           } finally {
+            unsubscribe();
+
             controller.close();
           }
         },
@@ -2910,11 +3614,16 @@ export async function POST(
       {
         headers: {
           "Content-Type":
-            "text/plain; charset=utf-8",
+            "application/x-ndjson",
+
           "Cache-Control":
             "no-cache",
+
           Connection:
             "keep-alive",
+
+          "X-Accel-Buffering":
+            "no",
         },
       }
     );
@@ -2924,6 +3633,7 @@ export async function POST(
     return Response.json(
       {
         success: false,
+
         error:
           "Invalid request.",
       },
@@ -2986,6 +3696,213 @@ export async function GET() {
       {
         status: 500,
       }
+    );
+  }
+}
+```
+
+
+=====================================================
+FILE: app\api\terminal\route.ts
+=====================================================
+
+```ts
+import { NextRequest } from "next/server";
+
+import { terminal } from "@/core/terminal/terminal";
+
+function badRequest(message: string) {
+  return Response.json(
+    {
+      success: false,
+      error: message,
+    },
+    {
+      status: 400,
+    }
+  );
+}
+
+function internalError(error: unknown) {
+  console.error(error);
+
+  return Response.json(
+    {
+      success: false,
+      error: "Internal Server Error.",
+    },
+    {
+      status: 500,
+    }
+  );
+}
+
+export async function POST(
+  req: NextRequest
+) {
+  try {
+    const body =
+      await req.json();
+
+    const action =
+      body.action;
+
+    switch (action) {
+      // ----------------------------------------
+      // RUN
+      // ----------------------------------------
+
+      case "run": {
+        const command =
+          body.command;
+
+        if (
+          typeof command !==
+            "string" ||
+          !command.trim()
+        ) {
+          return badRequest(
+            "Missing command."
+          );
+        }
+
+        const result =
+          await terminal.run(
+            command
+          );
+
+        return Response.json({
+          success:
+            result.success,
+
+          processId:
+            result.processId,
+
+          command:
+            result.command,
+
+          stdout:
+            result.stdout,
+
+          stderr:
+            result.stderr,
+
+          exitCode:
+            result.exitCode,
+
+          duration:
+            result.duration,
+        });
+      }
+
+      // ----------------------------------------
+      // STOP
+      // ----------------------------------------
+
+      case "stop": {
+        const processId =
+          body.processId;
+
+        if (
+          typeof processId !==
+          "number"
+        ) {
+          return badRequest(
+            "Missing processId."
+          );
+        }
+
+        const stopped =
+          await terminal.stop(
+            processId
+          );
+
+        return Response.json({
+          success: stopped,
+
+          processId,
+
+          message: stopped
+            ? "Process stopped."
+            : "Unable to stop process.",
+        });
+      }
+
+      // ----------------------------------------
+      // LIST
+      // ----------------------------------------
+
+      case "list": {
+        const processes =
+          await terminal.list();
+
+        return Response.json({
+          success: true,
+
+          processes,
+        });
+      }
+
+      // ----------------------------------------
+      // LOGS
+      // ----------------------------------------
+
+      case "logs": {
+        const processId =
+          body.processId;
+
+        if (
+          typeof processId !==
+          "number"
+        ) {
+          return badRequest(
+            "Missing processId."
+          );
+        }
+
+        const logs =
+          await terminal.logs(
+            processId
+          );
+
+        if (!logs) {
+          return Response.json(
+            {
+              success: false,
+              error:
+                "Logs not found.",
+            },
+            {
+              status: 404,
+            }
+          );
+        }
+
+        return Response.json({
+          success: true,
+
+          processId,
+
+          stdout:
+            logs.stdout,
+
+          stderr:
+            logs.stderr,
+        });
+      }
+
+      // ----------------------------------------
+      // UNKNOWN
+      // ----------------------------------------
+
+      default:
+        return badRequest(
+          "Unknown terminal action."
+        );
+    }
+  } catch (error) {
+    return internalError(
+      error
     );
   }
 }
@@ -3395,7 +4312,6 @@ import { Geist, Geist_Mono, Instrument_Serif } from "next/font/google";
 import "./globals.css";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import "@/core/terminal";
 const geistSans = Geist({
   variable: "--font-sans",
   subsets: ["latin"],
@@ -3816,40 +4732,64 @@ FILE: components\chat\ModelSelector.tsx
 ```tsx
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+
 import { ChevronDown } from "lucide-react";
+
 import { useModelStore } from "@/store/model.store";
 
 export default function ModelSelector() {
-  const { models, selectedModel, loadModels, setSelectedModel } =
-    useModelStore();
+  const {
+    models,
+    selectedModel,
+    loadModels,
+    setSelectedModel,
+  } = useModelStore();
+
+  const [mounted, setMounted] =
+    useState(false);
 
   useEffect(() => {
+    setMounted(true);
     loadModels();
   }, [loadModels]);
+
+  if (!mounted) {
+    return (
+      <div className="relative inline-flex items-center">
+        <div className="h-[38px] w-44 animate-pulse rounded-lg border border-zinc-800 bg-zinc-900" />
+      </div>
+    );
+  }
 
   return (
     <div className="relative inline-flex items-center">
       <select
         value={selectedModel}
         aria-label="Select model"
-        onChange={(e) => setSelectedModel(e.target.value)}
-        className="
-          appearance-none cursor-pointer
-          rounded-lg border border-zinc-800 bg-zinc-900/60
-          py-2 pl-3 pr-8
-          text-sm font-medium text-zinc-200
-          transition-colors duration-150
-          hover:border-zinc-700 hover:bg-zinc-900
-          focus:outline-none focus:ring-1 focus:ring-zinc-600
-        "
+        onChange={(e) =>
+          setSelectedModel(
+            e.target.value
+          )
+        }
+        className="appearance-none cursor-pointer rounded-lg border border-zinc-800 bg-zinc-900/60 py-2 pl-3 pr-8 text-sm font-medium text-zinc-200 transition-colors duration-150 hover:border-zinc-700 hover:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-600"
       >
-        {models.map((model) => (
-          <option key={model.id} value={model.id}>
-            {model.name}
+        {models.length === 0 ? (
+          <option value="">
+            Loading models...
           </option>
-        ))}
+        ) : (
+          models.map((model) => (
+            <option
+              key={model.id}
+              value={model.id}
+            >
+              {model.name}
+            </option>
+          ))
+        )}
       </select>
+
       <ChevronDown
         size={14}
         className="pointer-events-none absolute right-2.5 text-zinc-500"
@@ -3921,16 +4861,44 @@ FILE: components\layout\MainLayout.tsx
 =====================================================
 
 ```tsx
+"use client";
+
+import { useState } from "react";
+
 import Header from "./Header";
+
 import ChatWindow from "../chat/ChatWindow";
 import ChatInput from "../chat/ChatInput";
 
+import TerminalDock from "../terminal/TerminalDock";
+
 export default function MainLayout() {
+  const [terminalOpen] =
+    useState(true);
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-zinc-950">
+      {/* Header */}
+
       <Header />
-      <ChatWindow />
-      <ChatInput />
+
+      {/* Workspace */}
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {/* Chat */}
+
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <ChatWindow />
+
+          <ChatInput />
+        </div>
+
+        {/* Terminal */}
+
+        {terminalOpen && (
+          <TerminalDock />
+        )}
+      </div>
     </div>
   );
 }
@@ -4063,6 +5031,1411 @@ export default function SidebarHeader() {
         </p>
       </button>
     </div>
+  );
+}
+```
+
+
+=====================================================
+FILE: components\terminal\TerminalDock.tsx
+=====================================================
+
+```tsx
+"use client";
+
+import dynamic from "next/dynamic";
+import { useState } from "react";
+
+import {
+  AlertCircle,
+  Bug,
+  FileText,
+  Terminal,
+} from "lucide-react";
+
+import { useTerminalStore } from "@/store/terminal.store";
+
+import TerminalTabs from "./TerminalTabs";
+import TerminalToolbar from "./TerminalToolbar";
+import TerminalStatus from "./TerminalStatus";
+import TerminalEmpty from "./TerminalEmpty";
+import TerminalInput from "./TerminalInput";
+import TerminalProcessList from "./TerminalProcessingList";
+
+/**
+ * IMPORTANT
+ * xterm.js is browser-only.
+ * Prevent SSR by dynamically importing it.
+ */
+const XTerm = dynamic(
+  () => import("./XTerm"),
+  {
+    ssr: false,
+
+    loading: () => (
+      <div className="flex h-full items-center justify-center bg-[#0d1117] text-sm text-zinc-500">
+        Initializing terminal...
+      </div>
+    ),
+  }
+);
+
+type DockTab =
+  | "terminal"
+  | "output"
+  | "problems"
+  | "logs";
+
+const TABS = [
+  {
+    id: "problems",
+    label: "Problems",
+    icon: AlertCircle,
+  },
+  {
+    id: "output",
+    label: "Output",
+    icon: FileText,
+  },
+  {
+    id: "terminal",
+    label: "Terminal",
+    icon: Terminal,
+  },
+  {
+    id: "logs",
+    label: "Logs",
+    icon: Bug,
+  },
+] as const;
+
+export default function TerminalDock() {
+  const [tab, setTab] =
+    useState<DockTab>("terminal");
+
+  const [
+    selectedProcess,
+    setSelectedProcess,
+  ] = useState<number>();
+
+  const events =
+    useTerminalStore(
+      (state) => state.events
+    );
+
+  async function executeCommand(
+    command: string
+  ) {
+    try {
+      await fetch(
+        "/api/terminal/run",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+
+          body: JSON.stringify({
+            command,
+          }),
+        }
+      );
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  async function killProcess(
+    processId: number
+  ) {
+    try {
+      await fetch(
+        "/api/terminal/stop",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+
+          body: JSON.stringify({
+            processId,
+          }),
+        }
+      );
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  return (
+    <div className="flex h-80 w-full flex-col overflow-hidden border-t border-zinc-800 bg-zinc-950">
+      {/* Header */}
+
+      <div className="flex h-11 items-center justify-between border-b border-zinc-800">
+        <TerminalTabs
+          value={tab}
+          onChange={(value) =>
+            setTab(value)
+          }
+        />
+
+        <TerminalToolbar />
+      </div>
+
+      {/* Body */}
+
+      <div className="flex flex-1 overflow-hidden">
+        {tab === "terminal" && (
+          <>
+            <div className="w-72 border-r border-zinc-800">
+              <TerminalProcessList
+                selectedProcess={
+                  selectedProcess
+                }
+                onSelect={
+                  setSelectedProcess
+                }
+                onKill={
+                  killProcess
+                }
+              />
+            </div>
+
+            <div className="flex min-w-0 flex-1 flex-col">
+              <TerminalStatus
+                processId={
+                  selectedProcess
+                }
+              />
+
+              <div className="flex-1 overflow-hidden">
+                {events.length ===
+                0 ? (
+                  <TerminalEmpty />
+                ) : (
+                  <XTerm
+                    processId={
+                      selectedProcess
+                    }
+                  />
+                )}
+              </div>
+
+              <TerminalInput
+                onExecute={
+                  executeCommand
+                }
+              />
+            </div>
+          </>
+        )}
+
+        {tab === "output" && (
+          <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
+            Output panel
+          </div>
+        )}
+
+        {tab === "logs" && (
+          <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
+            Logs panel
+          </div>
+        )}
+
+        {tab === "problems" && (
+          <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
+            No problems found.
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+
+      <div className="flex h-8 items-center justify-between border-t border-zinc-800 bg-zinc-900 px-3 text-xs text-zinc-500">
+        <span>
+          {events.length} event
+          {events.length === 1
+            ? ""
+            : "s"}
+        </span>
+
+        <span>
+          AGENTS Terminal
+        </span>
+      </div>
+    </div>
+  );
+}
+```
+
+
+=====================================================
+FILE: components\terminal\TerminalEmpty.tsx
+=====================================================
+
+```tsx
+"use client";
+
+import { Terminal } from "lucide-react";
+
+interface TerminalEmptyProps {
+  title?: string;
+
+  description?: string;
+}
+
+export default function TerminalEmpty({
+  title = "No Active Terminal",
+  description = "Run a command or let the AI execute a task to start a terminal session.",
+}: TerminalEmptyProps) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center bg-[#0d1117] px-8 text-center">
+      <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-zinc-800 bg-zinc-900">
+        <Terminal className="h-10 w-10 text-zinc-500" />
+      </div>
+
+      <h2 className="mt-6 text-lg font-semibold text-zinc-100">
+        {title}
+      </h2>
+
+      <p className="mt-2 max-w-md text-sm leading-6 text-zinc-500">
+        {description}
+      </p>
+
+      <div className="mt-8 rounded-lg border border-zinc-800 bg-zinc-900 px-5 py-3">
+        <code className="font-mono text-sm text-zinc-400">
+          npm run dev
+        </code>
+      </div>
+
+      <p className="mt-3 text-xs text-zinc-600">
+        Press Enter to execute commands from the terminal input below.
+      </p>
+    </div>
+  );
+}
+```
+
+
+=====================================================
+FILE: components\terminal\TerminalInput.tsx
+=====================================================
+
+```tsx
+"use client";
+
+import {
+  KeyboardEvent,
+  useState,
+} from "react";
+
+import {
+  CornerDownLeft,
+  Loader2,
+} from "lucide-react";
+
+interface TerminalInputProps {
+  disabled?: boolean;
+
+  placeholder?: string;
+
+  onExecute?(
+    command: string
+  ): Promise<void> | void;
+}
+
+export default function TerminalInput({
+  disabled = false,
+  placeholder = "Type a command...",
+  onExecute,
+}: TerminalInputProps) {
+  const [
+    command,
+    setCommand,
+  ] = useState("");
+
+  const [
+    loading,
+    setLoading,
+  ] = useState(false);
+
+  async function execute() {
+    const value =
+      command.trim();
+
+    if (
+      !value ||
+      loading ||
+      disabled
+    ) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      await onExecute?.(
+        value
+      );
+
+      setCommand("");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function onKeyDown(
+    e: KeyboardEvent<HTMLInputElement>
+  ) {
+    if (
+      e.key === "Enter"
+    ) {
+      e.preventDefault();
+
+      execute();
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-3 border-t border-zinc-800 bg-zinc-950 px-4 py-3">
+      <span className="select-none font-mono text-sm font-semibold text-green-400">
+        ❯
+      </span>
+
+      <input
+        value={command}
+        disabled={
+          disabled ||
+          loading
+        }
+        placeholder={
+          placeholder
+        }
+        onChange={(e) =>
+          setCommand(
+            e.target.value
+          )
+        }
+        onKeyDown={
+          onKeyDown
+        }
+        spellCheck={false}
+        autoComplete="off"
+        autoCorrect="off"
+        className="flex-1 bg-transparent font-mono text-sm text-zinc-100 outline-none placeholder:text-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+      />
+
+      <button
+        onClick={execute}
+        disabled={
+          disabled ||
+          loading ||
+          !command.trim()
+        }
+        className="flex h-9 w-9 items-center justify-center rounded-md border border-zinc-700 transition hover:border-zinc-500 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {loading ? (
+          <Loader2 className="h-4 w-4 animate-spin text-zinc-300" />
+        ) : (
+          <CornerDownLeft className="h-4 w-4 text-zinc-300" />
+        )}
+      </button>
+    </div>
+  );
+}
+```
+
+
+=====================================================
+FILE: components\terminal\TerminalOutput.tsx
+=====================================================
+
+```tsx
+"use client";
+
+import {
+  Trash2,
+  Square,
+  Copy,
+  RotateCcw,
+} from "lucide-react";
+
+import { useTerminalStore } from "@/store/terminal.store";
+
+interface TerminalToolbarProps {
+  running?: boolean;
+
+  onKill?(): void;
+
+  onRestart?(): void;
+}
+
+export default function TerminalToolbar({
+  running = false,
+  onKill,
+  onRestart,
+}: TerminalToolbarProps) {
+  const clear =
+    useTerminalStore(
+      (state) => state.clear
+    );
+
+  async function copyOutput() {
+    const events =
+      useTerminalStore.getState().events;
+
+    const text = events
+      .map((event) => event.data)
+      .join("");
+
+    try {
+      await navigator.clipboard.writeText(
+        text
+      );
+    } catch {}
+  }
+
+  return (
+    <div className="flex h-10 items-center justify-between border-b border-zinc-800 bg-zinc-900 px-3">
+      <div className="flex items-center gap-2">
+        <div
+          className={`h-2.5 w-2.5 rounded-full ${
+            running
+              ? "bg-green-500"
+              : "bg-zinc-500"
+          }`}
+        />
+
+        <span className="text-xs font-medium text-zinc-300">
+          {running
+            ? "Running"
+            : "Idle"}
+        </span>
+      </div>
+
+      <div className="flex items-center gap-1">
+        <button
+          onClick={copyOutput}
+          className="rounded-md p-2 text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
+          title="Copy Output"
+        >
+          <Copy className="h-4 w-4" />
+        </button>
+
+        <button
+          onClick={clear}
+          className="rounded-md p-2 text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
+          title="Clear"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+
+        <button
+          onClick={onRestart}
+          className="rounded-md p-2 text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
+          title="Restart"
+        >
+          <RotateCcw className="h-4 w-4" />
+        </button>
+
+        <button
+          disabled={!running}
+          onClick={onKill}
+          className="rounded-md p-2 text-red-400 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+          title="Kill Process"
+        >
+          <Square className="h-4 w-4 fill-current" />
+        </button>
+      </div>
+    </div>
+  );
+}
+```
+
+
+=====================================================
+FILE: components\terminal\TerminalProcessingList.tsx
+=====================================================
+
+```tsx
+"use client";
+
+import {
+  Square,
+  Play,
+  RefreshCw,
+} from "lucide-react";
+
+import { useMemo } from "react";
+
+import { useTerminalStore } from "@/store/terminal.store";
+
+interface TerminalProcess {
+  processId: number;
+  status: "running" | "finished";
+  command: string;
+  exitCode?: number;
+}
+
+interface TerminalProcessListProps {
+  onSelect?(
+    processId: number
+  ): void;
+
+  selectedProcess?: number;
+
+  onKill?(
+    processId: number
+  ): void;
+
+  onRestart?(
+    processId: number
+  ): void;
+}
+
+export default function TerminalProcessList({
+  onSelect,
+  selectedProcess,
+  onKill,
+  onRestart,
+}: TerminalProcessListProps) {
+  const events =
+    useTerminalStore(
+      (state) => state.events
+    );
+
+  const processes =
+    useMemo(() => {
+      const map =
+        new Map<
+          number,
+          TerminalProcess
+        >();
+
+      for (const event of events) {
+        if (
+          !map.has(
+            event.processId
+          )
+        ) {
+          map.set(
+            event.processId,
+            {
+              processId:
+                event.processId,
+
+              command: "",
+
+              status:
+                "running",
+            }
+          );
+        }
+
+        const process =
+          map.get(
+            event.processId
+          )!;
+
+        if (
+          event.type ===
+          "start"
+        ) {
+          process.command =
+            event.data;
+        }
+
+        if (
+          event.type ===
+          "exit"
+        ) {
+          process.status =
+            "finished";
+
+          process.exitCode =
+            event.exitCode;
+        }
+      }
+
+      return Array.from(
+        map.values()
+      ).sort(
+        (
+          a,
+          b
+        ) =>
+          b.processId -
+          a.processId
+      );
+    }, [events]);
+
+  if (
+    !processes.length
+  ) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+        No running processes.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col overflow-auto">
+      {processes.map(
+        (process) => (
+          <button
+            key={
+              process.processId
+            }
+            onClick={() =>
+              onSelect?.(
+                process.processId
+              )
+            }
+            className={`flex items-center justify-between border-b border-zinc-800 px-4 py-3 text-left transition hover:bg-zinc-900 ${
+              selectedProcess ===
+              process.processId
+                ? "bg-zinc-900"
+                : ""
+            }`}
+          >
+            <div className="flex flex-col">
+              <span className="font-mono text-xs text-zinc-300">
+                {
+                  process.command
+                }
+              </span>
+
+              <span className="mt-1 text-[11px] text-zinc-500">
+                PID #
+                {
+                  process.processId
+                }
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {process.status ===
+              "running" ? (
+                <>
+                  <div className="flex items-center gap-1 text-green-400">
+                    <Play className="h-3.5 w-3.5 fill-current" />
+
+                    <span className="text-xs">
+                      Running
+                    </span>
+                  </div>
+
+                  <button
+                    onClick={(
+                      e
+                    ) => {
+                      e.stopPropagation();
+
+                      onKill?.(
+                        process.processId
+                      );
+                    }}
+                    className="rounded p-1 hover:bg-red-500/10"
+                  >
+                    <Square className="h-4 w-4 text-red-400 fill-current" />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span
+                    className={`text-xs ${
+                      process.exitCode ===
+                      0
+                        ? "text-green-400"
+                        : "text-red-400"
+                    }`}
+                  >
+                    Exit{" "}
+                    {
+                      process.exitCode
+                    }
+                  </span>
+
+                  <button
+                    onClick={(
+                      e
+                    ) => {
+                      e.stopPropagation();
+
+                      onRestart?.(
+                        process.processId
+                      );
+                    }}
+                    className="rounded p-1 hover:bg-zinc-800"
+                  >
+                    <RefreshCw className="h-4 w-4 text-zinc-400" />
+                  </button>
+                </>
+              )}
+            </div>
+          </button>
+        )
+      )}
+    </div>
+  );
+}
+```
+
+
+=====================================================
+FILE: components\terminal\TerminalStatus.tsx
+=====================================================
+
+```tsx
+"use client";
+
+import {
+  CheckCircle2,
+  Clock3,
+  Loader2,
+  XCircle,
+} from "lucide-react";
+
+import { useMemo } from "react";
+
+import { useTerminalStore } from "@/store/terminal.store";
+
+interface TerminalStatusProps {
+  processId?: number;
+}
+
+export default function TerminalStatus({
+  processId,
+}: TerminalStatusProps) {
+  const events =
+    useTerminalStore(
+      (state) => state.events
+    );
+
+  const status =
+    useMemo(() => {
+      const filtered =
+        events.filter((event) =>
+          processId
+            ? event.processId ===
+              processId
+            : true
+        );
+
+      if (!filtered.length) {
+        return {
+          state: "idle",
+          text: "Idle",
+          color:
+            "text-zinc-400",
+          icon: Clock3,
+        };
+      }
+
+      const last =
+        filtered[
+          filtered.length - 1
+        ];
+
+      if (
+        last.type === "start"
+      ) {
+        return {
+          state:
+            "running",
+
+          text:
+            "Running",
+
+          color:
+            "text-blue-400",
+
+          icon:
+            Loader2,
+        };
+      }
+
+      if (
+        last.type === "exit"
+      ) {
+        if (
+          (last.exitCode ??
+            0) === 0
+        ) {
+          return {
+            state:
+              "success",
+
+            text:
+              "Completed",
+
+            color:
+              "text-green-400",
+
+            icon:
+              CheckCircle2,
+          };
+        }
+
+        return {
+          state:
+            "failed",
+
+          text:
+            "Failed",
+
+          color:
+            "text-red-400",
+
+          icon:
+            XCircle,
+        };
+      }
+
+      return {
+        state:
+          "running",
+
+        text:
+          "Running",
+
+        color:
+          "text-blue-400",
+
+        icon:
+          Loader2,
+      };
+    }, [
+      events,
+      processId,
+    ]);
+
+  const Icon =
+    status.icon;
+
+  return (
+    <div className="flex h-10 items-center justify-between border-t border-zinc-800 bg-zinc-900 px-4">
+      <div className="flex items-center gap-2">
+        <Icon
+          className={`h-4 w-4 ${status.color} ${
+            status.state ===
+            "running"
+              ? "animate-spin"
+              : ""
+          }`}
+        />
+
+        <span
+          className={`text-sm font-medium ${status.color}`}
+        >
+          {status.text}
+        </span>
+      </div>
+
+      <div className="text-xs text-zinc-500">
+        {processId
+          ? `PID ${processId}`
+          : "No Process"}
+      </div>
+    </div>
+  );
+}
+```
+
+
+=====================================================
+FILE: components\terminal\TerminalTabs.tsx
+=====================================================
+
+```tsx
+"use client";
+
+import {
+  AlertCircle,
+  Bug,
+  FileText,
+  Terminal,
+} from "lucide-react";
+
+import { cn } from "@/lib/utils";
+
+export type TerminalTab =
+  | "problems"
+  | "output"
+  | "terminal"
+  | "logs";
+
+interface TerminalTabsProps {
+  value: TerminalTab;
+
+  onChange(
+    tab: TerminalTab
+  ): void;
+
+  problemsCount?: number;
+
+  outputCount?: number;
+
+  terminalCount?: number;
+
+  logsCount?: number;
+}
+
+const tabs = [
+  {
+    id: "problems",
+    label: "Problems",
+    icon: AlertCircle,
+  },
+  {
+    id: "output",
+    label: "Output",
+    icon: FileText,
+  },
+  {
+    id: "terminal",
+    label: "Terminal",
+    icon: Terminal,
+  },
+  {
+    id: "logs",
+    label: "Logs",
+    icon: Bug,
+  },
+] as const;
+
+export default function TerminalTabs({
+  value,
+  onChange,
+  problemsCount = 0,
+  outputCount = 0,
+  terminalCount = 0,
+  logsCount = 0,
+}: TerminalTabsProps) {
+  function badge(
+    id: TerminalTab
+  ) {
+    switch (id) {
+      case "problems":
+        return problemsCount;
+
+      case "output":
+        return outputCount;
+
+      case "terminal":
+        return terminalCount;
+
+      case "logs":
+        return logsCount;
+
+      default:
+        return 0;
+    }
+  }
+
+  return (
+    <div className="flex h-10 items-center border-b border-zinc-800 bg-zinc-900">
+      {tabs.map(
+        ({
+          id,
+          label,
+          icon: Icon,
+        }) => {
+          const active =
+            value === id;
+
+          const count =
+            badge(id);
+
+          return (
+            <button
+              key={id}
+              onClick={() =>
+                onChange(id)
+              }
+              className={cn(
+                "group flex h-full items-center gap-2 border-b-2 px-4 text-sm transition-all",
+
+                active
+                  ? "border-blue-500 bg-zinc-950 text-white"
+                  : "border-transparent text-zinc-400 hover:bg-zinc-800 hover:text-white"
+              )}
+            >
+              <Icon className="h-4 w-4" />
+
+              <span>
+                {label}
+              </span>
+
+              {count >
+                0 && (
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+
+                    active
+                      ? "bg-blue-600 text-white"
+                      : "bg-zinc-700 text-zinc-200"
+                  )}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        }
+      )}
+    </div>
+  );
+}
+```
+
+
+=====================================================
+FILE: components\terminal\TerminalToolbar.tsx
+=====================================================
+
+```tsx
+"use client";
+
+import {
+  Trash2,
+  Square,
+  Copy,
+  RotateCcw,
+} from "lucide-react";
+
+import { useTerminalStore } from "@/store/terminal.store";
+
+interface TerminalToolbarProps {
+  running?: boolean;
+
+  onKill?(): void;
+
+  onRestart?(): void;
+}
+
+export default function TerminalToolbar({
+  running = false,
+  onKill,
+  onRestart,
+}: TerminalToolbarProps) {
+  const clear =
+    useTerminalStore(
+      (state) => state.clear
+    );
+
+  async function copyOutput() {
+    const events =
+      useTerminalStore.getState().events;
+
+    const text = events
+      .map((event) => event.data)
+      .join("");
+
+    try {
+      await navigator.clipboard.writeText(
+        text
+      );
+    } catch {}
+  }
+
+  return (
+    <div className="flex h-10 items-center justify-between border-b border-zinc-800 bg-zinc-900 px-3">
+      <div className="flex items-center gap-2">
+        <div
+          className={`h-2.5 w-2.5 rounded-full ${
+            running
+              ? "bg-green-500"
+              : "bg-zinc-500"
+          }`}
+        />
+
+        <span className="text-xs font-medium text-zinc-300">
+          {running
+            ? "Running"
+            : "Idle"}
+        </span>
+      </div>
+
+      <div className="flex items-center gap-1">
+        <button
+          onClick={copyOutput}
+          className="rounded-md p-2 text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
+          title="Copy Output"
+        >
+          <Copy className="h-4 w-4" />
+        </button>
+
+        <button
+          onClick={clear}
+          className="rounded-md p-2 text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
+          title="Clear"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+
+        <button
+          onClick={onRestart}
+          className="rounded-md p-2 text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
+          title="Restart"
+        >
+          <RotateCcw className="h-4 w-4" />
+        </button>
+
+        <button
+          disabled={!running}
+          onClick={onKill}
+          className="rounded-md p-2 text-red-400 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+          title="Kill Process"
+        >
+          <Square className="h-4 w-4 fill-current" />
+        </button>
+      </div>
+    </div>
+  );
+}
+```
+
+
+=====================================================
+FILE: components\terminal\XTerm.tsx
+=====================================================
+
+```tsx
+"use client";
+
+import {
+  useEffect,
+  useRef,
+} from "react";
+
+import "xterm/css/xterm.css";
+
+import { useTerminalStore } from "@/store/terminal.store";
+
+interface XTermProps {
+  processId?: number;
+}
+
+export default function XTerm({
+  processId,
+}: XTermProps) {
+  const containerRef =
+    useRef<HTMLDivElement>(null);
+
+  const terminalRef =
+    useRef<any>(null);
+
+  const fitAddonRef =
+    useRef<any>(null);
+
+  const events =
+    useTerminalStore(
+      (state) => state.events
+    );
+
+  // ----------------------------------
+  // Initialize Terminal (Client Only)
+  // ----------------------------------
+
+  useEffect(() => {
+    let disposed = false;
+
+    async function initialize() {
+      if (!containerRef.current) {
+        return;
+      }
+
+      const [
+        xterm,
+        fitAddonModule,
+      ] = await Promise.all([
+        import("xterm"),
+        import(
+          "@xterm/addon-fit"
+        ),
+      ]);
+
+      if (disposed) {
+        return;
+      }
+
+      const Terminal =
+        xterm.Terminal;
+
+      const FitAddon =
+        fitAddonModule.FitAddon;
+
+      const terminal =
+        new Terminal({
+          cursorBlink: true,
+
+          convertEol: true,
+
+          scrollback: 5000,
+
+          fontFamily:
+            "JetBrains Mono, Consolas, monospace",
+
+          fontSize: 14,
+
+          allowTransparency: true,
+
+          theme: {
+            background:
+              "#0d1117",
+
+            foreground:
+              "#e6edf3",
+
+            cursor:
+              "#58a6ff",
+
+            selectionBackground:
+              "#264f78",
+          },
+        });
+
+      const fit =
+        new FitAddon();
+
+      terminal.loadAddon(
+        fit
+      );
+
+      terminal.open(
+        containerRef.current
+      );
+
+      fit.fit();
+
+      terminalRef.current =
+        terminal;
+
+      fitAddonRef.current =
+        fit;
+
+      terminal.writeln(
+        "\x1b[36mAGENTS Terminal v2\x1b[0m"
+      );
+
+      terminal.writeln("");
+
+      const resize =
+        () => fit.fit();
+
+      window.addEventListener(
+        "resize",
+        resize
+      );
+
+      return () => {
+        window.removeEventListener(
+          "resize",
+          resize
+        );
+
+        terminal.dispose();
+      };
+    }
+
+    const cleanup =
+      initialize();
+
+    return () => {
+      disposed = true;
+
+      cleanup.then(
+        (fn) => fn?.()
+      );
+    };
+  }, []);
+
+  // ----------------------------------
+  // Render Events
+  // ----------------------------------
+
+  useEffect(() => {
+    const terminal =
+      terminalRef.current;
+
+    if (!terminal) {
+      return;
+    }
+
+    terminal.clear();
+
+    terminal.writeln(
+      "\x1b[36mAGENTS Terminal v2\x1b[0m"
+    );
+
+    terminal.writeln("");
+
+    const filtered =
+      events.filter(
+        (event) =>
+          processId
+            ? event.processId ===
+              processId
+            : true
+      );
+
+    for (const event of filtered) {
+      switch (
+        event.type
+      ) {
+        case "start":
+          terminal.writeln(
+            `\x1b[36m$ ${event.data}\x1b[0m`
+          );
+          break;
+
+        case "stdout":
+          terminal.write(
+            event.data
+          );
+          break;
+
+        case "stderr":
+          terminal.write(
+            `\x1b[31m${event.data}\x1b[0m`
+          );
+          break;
+
+        case "exit":
+          if (
+            event.exitCode ===
+            0
+          ) {
+            terminal.writeln(
+              "\n\x1b[32m✔ Process exited successfully.\x1b[0m"
+            );
+          } else {
+            terminal.writeln(
+              `\n\x1b[31m✖ Process exited (${event.exitCode}).\x1b[0m`
+            );
+          }
+          break;
+      }
+    }
+
+    fitAddonRef.current?.fit();
+  }, [
+    events,
+    processId,
+  ]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="h-full w-full overflow-hidden bg-[#0d1117]"
+    />
   );
 }
 ```
@@ -5907,25 +8280,36 @@ import { workspace } from "./workspace";
 export class LocalFileSystem
   implements FileSystemProvider
 {
-  private validate(
-    target: string
-  ): string {
-    const root =
-      workspace.getRoot();
+  private validate(target: string): string {
+  const root = path.resolve(
+    workspace.getRoot()
+  );
 
-    const resolved =
-      path.resolve(target);
+  // Relative paths should be inside workspace
+  const resolved = path.isAbsolute(target)
+    ? path.resolve(target)
+    : path.resolve(root, target);
 
-    if (
-      !resolved.startsWith(root)
-    ) {
-      throw new Error(
-        "Access denied."
-      );
-    }
+  // Windows-safe comparison
+  const normalizedRoot =
+    path.normalize(root).toLowerCase();
 
-    return resolved;
+  const normalizedResolved =
+    path.normalize(resolved).toLowerCase();
+
+  if (
+    normalizedResolved !== normalizedRoot &&
+    !normalizedResolved.startsWith(
+      normalizedRoot + path.sep
+    )
+  ) {
+    throw new Error(
+      `Access denied.\nWorkspace: ${root}\nTarget: ${resolved}`
+    );
   }
+
+  return resolved;
+}
 
   async getTree(
     root?: string
@@ -6136,21 +8520,72 @@ FILE: core\filesystem\workspace.ts
 =====================================================
 
 ```ts
+import fs from "fs";
 import path from "path";
 
-class WorkspaceManager {
-  private workspace = path.resolve(
-    process.env.WORKSPACE_ROOT ??
-      process.cwd()
-  );
+interface WorkspaceConfig {
+  root: string;
+}
 
-  getRoot() {
-    return this.workspace;
+const CONFIG_DIR = path.join(
+  process.cwd(),
+  ".agents"
+);
+
+const CONFIG_FILE = path.join(
+  CONFIG_DIR,
+  "workspace.json"
+);
+
+class WorkspaceManager {
+  private ensureConfig() {
+    if (!fs.existsSync(CONFIG_DIR)) {
+      fs.mkdirSync(CONFIG_DIR, {
+        recursive: true,
+      });
+    }
+
+    if (!fs.existsSync(CONFIG_FILE)) {
+      fs.writeFileSync(
+        CONFIG_FILE,
+        JSON.stringify(
+          {
+            root: process.cwd(),
+          },
+          null,
+          2
+        )
+      );
+    }
+  }
+
+  getRoot(): string {
+    this.ensureConfig();
+
+    const config =
+      JSON.parse(
+        fs.readFileSync(
+          CONFIG_FILE,
+          "utf8"
+        )
+      ) as WorkspaceConfig;
+
+    return path.resolve(config.root);
   }
 
   setRoot(root: string) {
-    this.workspace =
-      path.resolve(root);
+    this.ensureConfig();
+
+    fs.writeFileSync(
+      CONFIG_FILE,
+      JSON.stringify(
+        {
+          root: path.resolve(root),
+        },
+        null,
+        2
+      )
+    );
   }
 }
 
@@ -7059,102 +9494,410 @@ export const symbolIndex =
 
 
 =====================================================
-FILE: core\terminal\index.ts
-=====================================================
-
-```ts
-import {
-  registerTerminal,
-} from "./terminal";
-
-import { LocalTerminal } from "./local-terminal";
-
-registerTerminal(
-  new LocalTerminal()
-);
-```
-
-
-=====================================================
 FILE: core\terminal\local-terminal.ts
 =====================================================
 
 ```ts
-import { exec } from "child_process";
-import { promisify } from "util";
+import { spawn } from "child_process";
 
 import { workspace } from "../filesystem/workspace";
+
+import { processManager } from "./ProcessManager";
+import { terminalHistory } from "./TerminalHistory";
+import { shellDetector } from "./ShellDetector";
 
 import {
   TerminalProvider,
   TerminalResult,
+  TerminalRunOptions,
 } from "./types";
-
-const execute =
-  promisify(exec);
 
 export class LocalTerminal
   implements TerminalProvider
 {
   async run(
-    command: string
+    command: string,
+    options?: TerminalRunOptions
   ): Promise<TerminalResult> {
+    const cwd =
+      options?.cwd ??
+      workspace.getRoot();
+
     const start = Date.now();
 
-    try {
-      const result =
-        await execute(command, {
-          cwd:
-            workspace.getRoot(),
+    const shell =
+      shellDetector.detect();
 
-          windowsHide: true,
+    const child = spawn(
+      shell.executable,
+      [...shell.args, command],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          ...options?.env,
+        },
+        windowsHide: true,
+      }
+    );
 
-          maxBuffer:
-            1024 *
-            1024 *
-            10,
-        });
-
-      return {
-        success: true,
-
+    const processInfo =
+      processManager.register(
+        child,
         command,
+        cwd
+      );
 
-        stdout:
-          result.stdout,
+    terminalHistory.add({
+      id: processInfo.id,
+      command,
+      cwd,
+      startedAt: Date.now(),
+    });
 
-        stderr:
-          result.stderr,
+    return new Promise(
+      (resolve) => {
+        child.on(
+          "close",
+          (code) => {
+            const exitCode =
+              code ?? 0;
 
-        exitCode: 0,
+            terminalHistory.finish(
+              processInfo.id,
+              exitCode
+            );
 
-        duration:
-          Date.now() -
-          start,
-      };
-    } catch (error: any) {
-      return {
-        success: false,
+            const logs =
+              processManager.getLogs(
+                processInfo.id
+              );
 
-        command,
+            resolve({
+              success:
+                exitCode === 0,
 
-        stdout:
-          error.stdout ?? "",
+              processId:
+                processInfo.id,
 
-        stderr:
-          error.stderr ??
-          error.message,
+              command,
 
-        exitCode:
-          error.code ?? 1,
+              stdout:
+                logs?.stdout ??
+                "",
 
-        duration:
-          Date.now() -
-          start,
-      };
-    }
+              stderr:
+                logs?.stderr ??
+                "",
+
+              exitCode,
+
+              duration:
+                Date.now() -
+                start,
+            });
+          }
+        );
+      }
+    );
+  }
+
+  async stop(
+    processId: number
+  ): Promise<boolean> {
+    return processManager.kill(
+      processId
+    );
+  }
+
+  async list() {
+    return processManager.list();
+  }
+
+  async logs(
+    processId: number
+  ) {
+    return processManager.getLogs(
+      processId
+    );
   }
 }
+```
+
+
+=====================================================
+FILE: core\terminal\ProcessManager.ts
+=====================================================
+
+```ts
+import { ChildProcess } from "child_process";
+
+import { terminalEvents } from "./TerminalEvents";
+
+export interface ProcessInfo {
+  id: number;
+
+  command: string;
+
+  cwd: string;
+
+  process: ChildProcess;
+
+  startedAt: number;
+
+  status:
+    | "running"
+    | "finished"
+    | "failed"
+    | "killed";
+
+  exitCode?: number | null;
+
+  stdout: string;
+
+  stderr: string;
+}
+
+export class ProcessManager {
+  private nextId = 1;
+
+  private readonly processes =
+    new Map<number, ProcessInfo>();
+
+  register(
+    process: ChildProcess,
+    command: string,
+    cwd: string
+  ): ProcessInfo {
+    const info: ProcessInfo = {
+      id: this.nextId++,
+
+      command,
+
+      cwd,
+
+      process,
+
+      startedAt: Date.now(),
+
+      status: "running",
+
+      stdout: "",
+
+      stderr: "",
+    };
+
+    this.processes.set(
+      info.id,
+      info
+    );
+
+    // ----------------------------------
+    // PROCESS START
+    // ----------------------------------
+
+    terminalEvents.emit({
+      processId: info.id,
+      type: "start",
+      data: command,
+      timestamp: Date.now(),
+    });
+
+    // ----------------------------------
+    // STDOUT
+    // ----------------------------------
+
+    process.stdout?.on(
+      "data",
+      (chunk: Buffer | string) => {
+        const text =
+          chunk.toString();
+
+        info.stdout += text;
+
+        terminalEvents.emit({
+          processId: info.id,
+          type: "stdout",
+          data: text,
+          timestamp:
+            Date.now(),
+        });
+      }
+    );
+
+    // ----------------------------------
+    // STDERR
+    // ----------------------------------
+
+    process.stderr?.on(
+      "data",
+      (chunk: Buffer | string) => {
+        const text =
+          chunk.toString();
+
+        info.stderr += text;
+
+        terminalEvents.emit({
+          processId: info.id,
+          type: "stderr",
+          data: text,
+          timestamp:
+            Date.now(),
+        });
+      }
+    );
+
+    // ----------------------------------
+    // EXIT
+    // ----------------------------------
+
+    process.on(
+      "exit",
+      (code) => {
+        info.exitCode = code;
+
+        info.status =
+          code === 0
+            ? "finished"
+            : "failed";
+
+        terminalEvents.emit({
+          processId: info.id,
+          type: "exit",
+          data: "",
+          exitCode:
+            code ?? 0,
+          timestamp:
+            Date.now(),
+        });
+      }
+    );
+
+    process.on(
+      "error",
+      (error) => {
+        info.status =
+          "failed";
+
+        terminalEvents.emit({
+          processId: info.id,
+          type: "stderr",
+          data:
+            error.message,
+          timestamp:
+            Date.now(),
+        });
+      }
+    );
+
+    return info;
+  }
+
+  get(
+    id: number
+  ): ProcessInfo | undefined {
+    return this.processes.get(
+      id
+    );
+  }
+
+  list(): ProcessInfo[] {
+    return Array.from(
+      this.processes.values()
+    ).sort(
+      (a, b) =>
+        b.startedAt -
+        a.startedAt
+    );
+  }
+
+  isRunning(
+    id: number
+  ): boolean {
+    return (
+      this.get(id)
+        ?.status ===
+      "running"
+    );
+  }
+
+  kill(
+    id: number
+  ): boolean {
+    const info =
+      this.get(id);
+
+    if (
+      !info ||
+      info.status !==
+        "running"
+    ) {
+      return false;
+    }
+
+    info.process.kill();
+
+    info.status =
+      "killed";
+
+    terminalEvents.emit({
+      processId: info.id,
+      type: "exit",
+      data: "Killed",
+      exitCode: -1,
+      timestamp:
+        Date.now(),
+    });
+
+    return true;
+  }
+
+  remove(
+    id: number
+  ) {
+    this.processes.delete(
+      id
+    );
+  }
+
+  clearFinished() {
+    for (const [
+      id,
+      process,
+    ] of this.processes) {
+      if (
+        process.status !==
+        "running"
+      ) {
+        this.processes.delete(
+          id
+        );
+      }
+    }
+  }
+
+  getLogs(
+    id: number
+  ) {
+    const info =
+      this.get(id);
+
+    if (!info) {
+      return null;
+    }
+
+    return {
+      stdout:
+        info.stdout,
+
+      stderr:
+        info.stderr,
+    };
+  }
+}
+
+export const processManager =
+  new ProcessManager();
 ```
 
 
@@ -7168,19 +9911,647 @@ FILE: core\terminal\registry.ts
 
 
 =====================================================
+FILE: core\terminal\ShellDetector.ts
+=====================================================
+
+```ts
+import os from "os";
+
+export interface ShellInfo {
+  shell: string;
+
+  executable: string;
+
+  args: string[];
+}
+
+export class ShellDetector {
+  detect(): ShellInfo {
+    // Windows
+    if (process.platform === "win32") {
+      const comspec =
+        process.env.ComSpec ??
+        "C:\\Windows\\System32\\cmd.exe";
+
+      if (
+        comspec
+          .toLowerCase()
+          .includes("powershell")
+      ) {
+        return {
+          shell: "powershell",
+
+          executable: comspec,
+
+          args: [
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+          ],
+        };
+      }
+
+      return {
+        shell: "cmd",
+
+        executable: comspec,
+
+        args: ["/c"],
+      };
+    }
+
+    // macOS / Linux
+
+    const shell =
+      process.env.SHELL ??
+      "/bin/bash";
+
+    return {
+      shell: shell.split("/").pop() ?? "bash",
+
+      executable: shell,
+
+      args: ["-c"],
+    };
+  }
+
+  getName(): string {
+    return this.detect().shell;
+  }
+
+  getExecutable(): string {
+    return this.detect().executable;
+  }
+
+  isWindows() {
+    return process.platform === "win32";
+  }
+
+  isLinux() {
+    return process.platform === "linux";
+  }
+
+  isMac() {
+    return process.platform === "darwin";
+  }
+
+  platform() {
+    return os.platform();
+  }
+}
+
+export const shellDetector =
+  new ShellDetector();
+
+```
+
+
+=====================================================
+FILE: core\terminal\StreamManager.ts
+=====================================================
+
+```ts
+import { terminalEvents } from "./TerminalEvents";
+
+export interface ProcessStream {
+  processId: number;
+
+  stdout: string;
+
+  stderr: string;
+
+  startedAt: number;
+
+  updatedAt: number;
+
+  finished: boolean;
+
+  exitCode?: number;
+}
+
+
+// Actual terminal event type
+export interface StreamEvent {
+  processId: number;
+
+  type:
+    | "start"
+    | "stdout"
+    | "stderr"
+    | "exit";
+
+  data: string;
+
+  exitCode?: number;
+
+  timestamp: number;
+}
+
+class StreamManager {
+  private readonly streams =
+    new Map<number, ProcessStream>();
+
+  private readonly listeners =
+    new Set<
+      (event: StreamEvent) => void
+    >();
+
+  constructor() {
+    terminalEvents.onTerminal(
+      (event: StreamEvent) => {
+        let stream =
+          this.streams.get(
+            event.processId
+          );
+
+        if (!stream) {
+          stream = {
+            processId:
+              event.processId,
+
+            stdout: "",
+
+            stderr: "",
+
+            startedAt:
+              Date.now(),
+
+            updatedAt:
+              Date.now(),
+
+            finished: false,
+          };
+
+          this.streams.set(
+            event.processId,
+            stream
+          );
+        }
+
+        stream.updatedAt =
+          Date.now();
+
+        switch (event.type) {
+          case "stdout":
+            stream.stdout +=
+              event.data;
+            break;
+
+          case "stderr":
+            stream.stderr +=
+              event.data;
+            break;
+
+          case "exit":
+            stream.finished =
+              true;
+
+            stream.exitCode =
+              event.exitCode;
+            break;
+        }
+
+        // 🔥 Broadcast live
+        for (const listener of this.listeners) {
+          listener(event);
+        }
+      }
+    );
+  }
+
+  subscribe(
+    listener: (
+      event: StreamEvent
+    ) => void
+  ) {
+    this.listeners.add(
+      listener
+    );
+
+    return () =>
+      this.listeners.delete(
+        listener
+      );
+  }
+
+  get(
+    processId: number
+  ) {
+    return this.streams.get(
+      processId
+    );
+  }
+
+  stdout(
+    processId: number
+  ) {
+    return (
+      this.streams.get(
+        processId
+      )?.stdout ?? ""
+    );
+  }
+
+  stderr(
+    processId: number
+  ) {
+    return (
+      this.streams.get(
+        processId
+      )?.stderr ?? ""
+    );
+  }
+
+  list() {
+    return Array.from(
+      this.streams.values()
+    );
+  }
+
+  clear(
+    processId: number
+  ) {
+    this.streams.delete(
+      processId
+    );
+  }
+
+  clearFinished() {
+    for (const [
+      id,
+      stream,
+    ] of this.streams) {
+      if (stream.finished) {
+        this.streams.delete(
+          id
+        );
+      }
+    }
+  }
+
+  clearAll() {
+    this.streams.clear();
+  }
+}
+
+export const streamManager =
+  new StreamManager();
+```
+
+
+=====================================================
 FILE: core\terminal\terminal.ts
 =====================================================
 
 ```ts
+import { LocalTerminal } from "./local-terminal";
 import { TerminalProvider } from "./types";
 
-export let terminal: TerminalProvider;
+/**
+ * Global singleton terminal instance.
+ *
+ * This removes the need for runtime registration and prevents:
+ * "Cannot read properties of undefined (reading 'run')"
+ */
 
-export function registerTerminal(
-  provider: TerminalProvider
-) {
-  terminal = provider;
+export const terminal: TerminalProvider =
+  new LocalTerminal();
+```
+
+
+=====================================================
+FILE: core\terminal\TerminalEvents.ts
+=====================================================
+
+```ts
+import { EventEmitter } from "events";
+
+export interface TerminalEvent {
+  processId: number;
+
+  type:
+    | "start"
+    | "stdout"
+    | "stderr"
+    | "exit";
+
+  data: string;
+
+  exitCode?: number;
+
+  timestamp: number;
 }
+
+type TerminalListener = (
+  event: TerminalEvent
+) => void;
+
+export class TerminalEvents {
+  private readonly emitter =
+    new EventEmitter();
+
+  constructor() {
+    this.emitter.setMaxListeners(
+      100
+    );
+  }
+
+  // ----------------------------------
+  // Emit
+  // ----------------------------------
+
+  emit(
+    event: TerminalEvent
+  ) {
+    this.emitter.emit(
+      "terminal",
+      event
+    );
+
+    this.emitter.emit(
+      `process:${event.processId}`,
+      event
+    );
+  }
+
+  // ----------------------------------
+  // Global Stream
+  // ----------------------------------
+
+  onTerminal(
+    listener: TerminalListener
+  ) {
+    this.emitter.on(
+      "terminal",
+      listener
+    );
+
+    return () =>
+      this.offTerminal(
+        listener
+      );
+  }
+
+  onceTerminal(
+    listener: TerminalListener
+  ) {
+    this.emitter.once(
+      "terminal",
+      listener
+    );
+  }
+
+  offTerminal(
+    listener: TerminalListener
+  ) {
+    this.emitter.off(
+      "terminal",
+      listener
+    );
+  }
+
+  // ----------------------------------
+  // Process Stream
+  // ----------------------------------
+
+  onProcess(
+    processId: number,
+    listener: TerminalListener
+  ) {
+    const event =
+      `process:${processId}`;
+
+    this.emitter.on(
+      event,
+      listener
+    );
+
+    return () =>
+      this.offProcess(
+        processId,
+        listener
+      );
+  }
+
+  onceProcess(
+    processId: number,
+    listener: TerminalListener
+  ) {
+    this.emitter.once(
+      `process:${processId}`,
+      listener
+    );
+  }
+
+  offProcess(
+    processId: number,
+    listener: TerminalListener
+  ) {
+    this.emitter.off(
+      `process:${processId}`,
+      listener
+    );
+  }
+
+  // ----------------------------------
+  // Utils
+  // ----------------------------------
+
+  listenerCount() {
+    return this.emitter.listenerCount(
+      "terminal"
+    );
+  }
+
+  clearProcess(
+    processId: number
+  ) {
+    this.emitter.removeAllListeners(
+      `process:${processId}`
+    );
+  }
+
+  clearAll() {
+    this.emitter.removeAllListeners(
+      "terminal"
+    );
+  }
+}
+
+export const terminalEvents =
+  new TerminalEvents();
+```
+
+
+=====================================================
+FILE: core\terminal\TerminalHistory.ts
+=====================================================
+
+```ts
+export interface HistoryEntry {
+  id: number;
+
+  command: string;
+
+  cwd: string;
+
+  startedAt: number;
+
+  finishedAt?: number;
+
+  exitCode?: number;
+}
+
+export class TerminalHistory {
+  private history: HistoryEntry[] =
+    [];
+
+  add(
+    entry: HistoryEntry
+  ) {
+    this.history.unshift(entry);
+
+    if (
+      this.history.length > 500
+    ) {
+      this.history.pop();
+    }
+  }
+
+  finish(
+    id: number,
+    exitCode: number
+  ) {
+    const command =
+      this.history.find(
+        (item) => item.id === id
+      );
+
+    if (!command) {
+      return;
+    }
+
+    command.exitCode =
+      exitCode;
+
+    command.finishedAt =
+      Date.now();
+  }
+
+  all() {
+    return [...this.history];
+  }
+
+  latest(
+    count = 20
+  ) {
+    return this.history.slice(
+      0,
+      count
+    );
+  }
+
+  clear() {
+    this.history = [];
+  }
+
+  get(id: number) {
+    return this.history.find(
+      (item) => item.id === id
+    );
+  }
+}
+
+export const terminalHistory =
+  new TerminalHistory();
+```
+
+
+=====================================================
+FILE: core\terminal\TerminalSession.ts
+=====================================================
+
+```ts
+import { spawn, ChildProcess } from "child_process";
+
+import { workspace } from "../filesystem/workspace";
+
+import { processManager } from "./ProcessManager";
+
+export interface TerminalSessionResult {
+  id: number;
+
+  process: ChildProcess;
+}
+
+export class TerminalSession {
+  run(
+    command: string,
+    cwd = workspace.getRoot()
+  ): TerminalSessionResult {
+    const shell =
+      process.platform === "win32"
+        ? "cmd.exe"
+        : "/bin/bash";
+
+    const shellArgs =
+      process.platform === "win32"
+        ? ["/c", command]
+        : ["-c", command];
+
+    const child = spawn(shell, shellArgs, {
+      cwd,
+      env: process.env,
+      windowsHide: true,
+
+      stdio: [
+        "ignore",
+        "pipe",
+        "pipe",
+      ],
+    });
+
+    const info =
+      processManager.register(
+        child,
+        command,
+        cwd
+      );
+
+    console.log(
+      `\n[Terminal] Started PID ${info.id}`
+    );
+
+    console.log(
+      `[Terminal] ${command}\n`
+    );
+
+    return {
+      id: info.id,
+
+      process: child,
+    };
+  }
+
+  stop(id: number): boolean {
+    return processManager.kill(id);
+  }
+
+  list() {
+    return processManager.list();
+  }
+
+  logs(id: number) {
+    return processManager.getLogs(id);
+  }
+
+  get(id: number) {
+    return processManager.get(id);
+  }
+}
+
+export const terminalSession =
+  new TerminalSession();
 ```
 
 
@@ -7189,8 +10560,54 @@ FILE: core\terminal\types.ts
 =====================================================
 
 ```ts
+export type ProcessStatus =
+  | "running"
+  | "finished"
+  | "failed"
+  | "killed";
+
+export interface TerminalRunOptions {
+  cwd?: string;
+
+  env?: NodeJS.ProcessEnv;
+
+  timeout?: number;
+
+  background?: boolean;
+}
+
+export interface TerminalProcess {
+  id: number;
+
+  command: string;
+
+  cwd: string;
+
+  status: ProcessStatus;
+
+  startedAt: number;
+
+  exitCode?: number | null;
+
+  stdout: string;
+
+  stderr: string;
+}
+
+export interface TerminalStreamChunk {
+  processId: number;
+
+  type:
+    | "stdout"
+    | "stderr";
+
+  data: string;
+}
+
 export interface TerminalResult {
   success: boolean;
+
+  processId?: number;
 
   command: string;
 
@@ -7205,8 +10622,24 @@ export interface TerminalResult {
 
 export interface TerminalProvider {
   run(
-    command: string
+    command: string,
+    options?: TerminalRunOptions
   ): Promise<TerminalResult>;
+
+  stop(
+    processId: number
+  ): Promise<boolean>;
+
+  list(): Promise<
+    TerminalProcess[]
+  >;
+
+  logs(
+    processId: number
+  ): Promise<{
+    stdout: string;
+    stderr: string;
+  } | null>;
 }
 ```
 
@@ -8059,65 +11492,163 @@ import { MessageRole } from "@/types/chat";
 
 export interface AIMessage {
   role: MessageRole;
+
   content: string;
+}
+
+export interface StreamEvent {
+  type:
+    | "assistant"
+    | "terminal"
+    | "system";
+
+  data: any;
 }
 
 export interface StreamOptions {
   model?: string;
+
   messages: AIMessage[];
-  onToken: (token: string) => void;
+
+  onEvent(
+    event: StreamEvent
+  ): void;
 }
 
 export class ChatService {
   async streamMessage({
     model = "qwen3:4b",
     messages,
-    onToken,
+    onEvent,
   }: StreamOptions): Promise<void> {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-      }),
-    });
+    const response =
+      await fetch(
+        "/api/chat",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+
+          body: JSON.stringify({
+            model,
+            messages,
+          }),
+        }
+      );
 
     if (!response.ok) {
-      throw new Error(`Request failed (${response.status})`);
+      throw new Error(
+        `Request failed (${response.status})`
+      );
     }
 
     if (!response.body) {
-      throw new Error("Response body is empty.");
+      throw new Error(
+        "Response body is empty."
+      );
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+    const reader =
+      response.body.getReader();
+
+    const decoder =
+      new TextDecoder();
+
+    let buffer = "";
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const {
+          done,
+          value,
+        } = await reader.read();
 
-        if (done) break;
+        if (done) {
+          break;
+        }
 
-        onToken(decoder.decode(value, { stream: true }));
+        buffer += decoder.decode(
+          value,
+          {
+            stream: true,
+          }
+        );
+
+        const lines =
+          buffer.split("\n");
+
+        buffer =
+          lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed =
+            line.trim();
+
+          if (!trimmed) {
+            continue;
+          }
+
+          try {
+            const event: StreamEvent =
+              JSON.parse(
+                trimmed
+              );
+
+            onEvent(event);
+          } catch {
+            onEvent({
+              type:
+                "assistant",
+
+              data: trimmed,
+            });
+          }
+        }
       }
 
-      // Flush remaining buffered bytes
-      const remaining = decoder.decode();
+      const remaining =
+        decoder.decode();
 
       if (remaining) {
-        onToken(remaining);
+        buffer += remaining;
       }
+
+      if (buffer.trim()) {
+        try {
+          const event: StreamEvent =
+            JSON.parse(
+              buffer.trim()
+            );
+
+          onEvent(event);
+        } catch {
+          onEvent({
+            type:
+              "assistant",
+
+            data:
+              buffer.trim(),
+          });
+        }
+      }
+    } catch (error) {
+      console.error(
+        "[ChatService]",
+        error
+      );
+
+      throw error;
     } finally {
       reader.releaseLock();
     }
   }
 }
 
-export const chatService = new ChatService();
+export const chatService =
+  new ChatService();
 ```
 
 
@@ -8165,70 +11696,32 @@ FILE: store\chat.store.ts
 
 ```ts
 import { create } from "zustand";
-import { chatService } from "@/services/chat/chat.service";
+
+import {
+  chatService,
+  StreamEvent,
+} from "@/services/chat/chat.service";
+
 import { ChatMessage } from "@/types/chat";
+
 import { useModelStore } from "./model.store";
+import { useTerminalStore } from "./terminal.store";
+
 interface ChatStore {
   messages: ChatMessage[];
+
   loading: boolean;
+
   error: string | null;
 
-  sendMessage: (content: string) => Promise<void>;
-  clearMessages: () => void;
+  sendMessage(
+    content: string
+  ): Promise<void>;
+
+  clearMessages(): void;
 }
 
-export const useChatStore = create<ChatStore>((set, get) => ({
-  messages: [],
-  loading: false,
-  error: null,
-
-  async sendMessage(content: string) {
-    if (!content.trim()) return;
-
-    // User message
-    const userMessage: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content,
-      createdAt: Date.now(),
-    };
-
-    // Empty assistant message (will be streamed into)
-    const assistantId = crypto.randomUUID();
-
-    const assistantMessage: ChatMessage = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-      createdAt: Date.now(),
-    };
-
-    // Add both messages immediately
-    set((state) => ({
-      messages: [...state.messages, userMessage, assistantMessage],
-      loading: true,
-      error: null,
-    }));
-
-    try {
-      // Exclude the empty assistant placeholder from history
-      const history = get()
-        .messages
-        .filter(
-          (m) => !(m.id === assistantId && m.content === "")
-        )
-        .map((m) => ({
-          role: m.role,
-          content: m.content,
-        }));
-
-      await chatService.streamMessage({
-        model: useModelStore.getState().selectedModel,
-
-        messages: [
-          {
-            role: "system",
-            content: `You are AGENTS.
+const SYSTEM_PROMPT = `You are AGENTS.
 
 You are an AI Operating System.
 
@@ -8246,50 +11739,216 @@ Rules:
 - Be concise but complete.
 - Explain code only when necessary.
 - Prefer production-ready solutions.
-- Think step by step before answering.`,
-          },
+- Think step by step before answering.`;
 
-          ...history,
-        ],
+export const useChatStore =
+  create<ChatStore>((set, get) => ({
+    messages: [],
 
-        onToken: (token: string) => {
-          set((state) => ({
-            messages: state.messages.map((message) =>
-              message.id === assistantId
-                ? {
-                    ...message,
-                    content: message.content + token,
-                  }
-                : message
-            ),
-          }));
-        },
-      });
+    loading: false,
 
-      set({
-        loading: false,
-      });
-    } catch (error) {
-      console.error(error);
+    error: null,
+
+    async sendMessage(
+      content: string
+    ) {
+      if (!content.trim()) {
+        return;
+      }
+
+      const userMessage: ChatMessage =
+      {
+        id: crypto.randomUUID(),
+
+        role: "user",
+
+        content,
+
+        createdAt:
+          Date.now(),
+      };
+
+      const assistantId =
+        crypto.randomUUID();
+
+      const assistantMessage: ChatMessage =
+      {
+        id: assistantId,
+
+        role: "assistant",
+
+        content: "",
+
+        createdAt:
+          Date.now(),
+      };
 
       set((state) => ({
-        loading: false,
-        error: "Failed to generate response.",
-        messages: state.messages.filter(
-          (message) => message.id !== assistantId
-        ),
-      }));
-    }
-  },
+        messages: [
+          ...state.messages,
+          userMessage,
+          assistantMessage,
+        ],
 
-  clearMessages() {
-    set({
-      messages: [],
-      loading: false,
-      error: null,
-    });
-  },
-}));
+        loading: true,
+
+        error: null,
+      }));
+
+      try {
+        const history =
+          get()
+            .messages.filter(
+              (
+                message
+              ) =>
+                !(
+                  message.id ===
+                  assistantId &&
+                  message.content ===
+                  ""
+                )
+            )
+            .map(
+              (
+                message
+              ) => ({
+                role:
+                  message.role,
+
+                content:
+                  message.content,
+              })
+            );
+
+        await chatService.streamMessage(
+          {
+            model:
+              useModelStore.getState()
+                .selectedModel,
+
+            messages: [
+              {
+                role:
+                  "system",
+
+                content:
+                  SYSTEM_PROMPT,
+              },
+
+              ...history,
+            ],
+
+            onEvent: (
+              event: StreamEvent
+            ) => {
+              switch (
+              event.type
+              ) {
+                // --------------------------------
+                // Assistant Stream
+                // --------------------------------
+
+                case "assistant": {
+                  set(
+                    (
+                      state
+                    ) => ({
+                      messages:
+                        state.messages.map(
+                          (
+                            message
+                          ) =>
+                            message.id ===
+                              assistantId
+                              ? {
+                                ...message,
+
+                                content:
+                                  message.content +
+                                  String(
+                                    event.data ??
+                                    ""
+                                  ),
+                              }
+                              : message
+                        ),
+                    })
+                  );
+
+                  break;
+                }
+
+                // --------------------------------
+                // Terminal Events
+                // --------------------------------
+
+                case "terminal": {
+                  useTerminalStore
+                    .getState()
+                    .append(event.data);
+
+                  break;
+                }
+
+                // --------------------------------
+                // System Events
+                // --------------------------------
+
+                case "system": {
+                  console.log(
+                    "[System]",
+                    event.data
+                  );
+
+                  break;
+                }
+
+                default:
+                  break;
+              }
+            },
+          }
+        );
+
+        set({
+          loading: false,
+        });
+      } catch (error) {
+        console.error(error);
+
+        set(
+          (
+            state
+          ) => ({
+            loading: false,
+
+            error:
+              "Failed to generate response.",
+
+            messages:
+              state.messages.filter(
+                (
+                  message
+                ) =>
+                  message.id !==
+                  assistantId
+              ),
+          })
+        );
+      }
+    },
+
+    clearMessages() {
+      set({
+        messages: [],
+
+        loading: false,
+
+        error: null,
+      });
+    },
+  }));
 ```
 
 
@@ -8347,6 +12006,82 @@ FILE: store\settings.store.ts
 
 ```ts
 
+```
+
+
+=====================================================
+FILE: store\terminal.store.ts
+=====================================================
+
+```ts
+// src/stores/terminal.store.ts
+
+import { create } from "zustand";
+
+export interface TerminalOutput {
+  processId: number;
+
+  type:
+    | "stdout"
+    | "stderr"
+    | "start"
+    | "exit";
+
+  data: string;
+
+  timestamp: number;
+
+  exitCode?: number;
+}
+
+interface TerminalStore {
+  events: TerminalOutput[];
+
+  append(
+    event: TerminalOutput
+  ): void;
+
+  clear(): void;
+
+  clearProcess(
+    processId: number
+  ): void;
+}
+
+export const useTerminalStore =
+  create<TerminalStore>(
+    (set) => ({
+      events: [],
+
+      append(event) {
+        set((state) => ({
+          events: [
+            ...state.events,
+            event,
+          ],
+        }));
+      },
+
+      clear() {
+        set({
+          events: [],
+        });
+      },
+
+      clearProcess(
+        processId
+      ) {
+        set((state) => ({
+          events:
+            state.events.filter(
+              (e) =>
+                e.processId !==
+                processId
+            ),
+        }));
+      },
+    })
+  );
 ```
 
 

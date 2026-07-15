@@ -13,49 +13,77 @@ export class ToolExecutor {
       return [];
     }
 
-    const tasks = calls.map(
-      async (call): Promise<ToolResult> => {
-        const tool =
-          toolRegistry[
-            call.tool as keyof typeof toolRegistry
-          ];
-
-        if (!tool) {
-          console.warn(
-            `Unknown tool: ${call.tool}`
-          );
-
-          return {
-            success: false,
-            tool: call.tool,
-            action: call.action,
-            content: `Unknown tool "${call.tool}".`,
-          };
-        }
-
-        try {
-          return await tool.execute(
-            call
-          );
-        } catch (error) {
-          console.error(
-            `[${call.tool}]`,
-            error
-          );
-
-          return {
-            success: false,
-            tool: call.tool,
-            action: call.action,
-            content:
-              error instanceof Error
-                ? error.message
-                : "Tool execution failed.",
-          };
-        }
-      }
+    console.log(
+      "\n========== TOOL EXECUTOR =========="
     );
 
-    return Promise.all(tasks);
+    const results: ToolResult[] =
+      [];
+
+    for (const call of calls) {
+      console.log(
+        `\n▶ ${call.tool}:${call.action}`
+      );
+
+      const tool =
+        toolRegistry[
+          call.tool as keyof typeof toolRegistry
+        ];
+
+      if (!tool) {
+        console.warn(
+          `Unknown tool: ${call.tool}`
+        );
+
+        results.push({
+          success: false,
+
+          tool: call.tool,
+
+          action: call.action,
+
+          content: `Unknown tool "${call.tool}".`,
+        });
+
+        continue;
+      }
+
+      try {
+        const result =
+          await tool.execute(
+            call
+          );
+
+        console.log(result);
+
+        results.push(
+          result
+        );
+      } catch (error) {
+        console.error(
+          `[${call.tool}]`,
+          error
+        );
+
+        results.push({
+          success: false,
+
+          tool: call.tool,
+
+          action: call.action,
+
+          content:
+            error instanceof Error
+              ? error.message
+              : "Tool execution failed.",
+        });
+      }
+    }
+
+    console.log(
+      "\n===================================\n"
+    );
+
+    return results;
   }
 }

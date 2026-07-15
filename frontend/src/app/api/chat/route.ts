@@ -3,8 +3,13 @@ import { NextRequest } from "next/server";
 import { chatAgent } from "@/agents/core/ChatAgent";
 import { codingAgent } from "@/agents/core/CodingAgent";
 
-function isCodingRequest(message: string) {
-  const text = message.toLowerCase();
+import { terminalEvents } from "@/core/terminal/TerminalEvents";
+
+function isCodingRequest(
+  message: string
+) {
+  const text =
+    message.toLowerCase();
 
   const keywords = [
     "create",
@@ -38,8 +43,24 @@ function isCodingRequest(message: string) {
     "refactor",
   ];
 
-  return keywords.some((word) =>
-    text.includes(word)
+  return keywords.some((k) =>
+    text.includes(k)
+  );
+}
+
+function encodeEvent(
+  encoder: TextEncoder,
+  type:
+    | "assistant"
+    | "system"
+    | "terminal",
+  data: unknown
+) {
+  return encoder.encode(
+    JSON.stringify({
+      type,
+      data,
+    }) + "\n"
   );
 }
 
@@ -59,7 +80,8 @@ export async function POST(
       return Response.json(
         {
           success: false,
-          error: "No message.",
+          error:
+            "No message.",
         },
         {
           status: 400,
@@ -75,10 +97,27 @@ export async function POST(
         async start(
           controller
         ) {
+          // --------------------------------
+          // Forward Terminal Events
+          // --------------------------------
+
+          const unsubscribe =
+            terminalEvents.onTerminal(
+              (event) => {
+                controller.enqueue(
+                  encodeEvent(
+                    encoder,
+                    "terminal",
+                    event
+                  )
+                );
+              }
+            );
+
           try {
-            // -------------------------
+            // --------------------------
             // Coding Agent
-            // -------------------------
+            // --------------------------
 
             if (
               isCodingRequest(
@@ -86,7 +125,15 @@ export async function POST(
               )
             ) {
               console.log(
+                "\n========== ROUTER =========="
+              );
+
+              console.log(
                 "Using CodingAgent"
+              );
+
+              console.log(
+                "============================\n"
               );
 
               const result =
@@ -98,22 +145,30 @@ export async function POST(
                 );
 
               controller.enqueue(
-                encoder.encode(
+                encodeEvent(
+                  encoder,
+                  "assistant",
                   result
                 )
               );
 
-              controller.close();
-
               return;
             }
 
-            // -------------------------
+            // --------------------------
             // Chat Agent
-            // -------------------------
+            // --------------------------
+
+            console.log(
+              "\n========== ROUTER =========="
+            );
 
             console.log(
               "Using ChatAgent"
+            );
+
+            console.log(
+              "============================\n"
             );
 
             for await (const token of chatAgent.chat(
@@ -123,7 +178,9 @@ export async function POST(
               }
             )) {
               controller.enqueue(
-                encoder.encode(
+                encodeEvent(
+                  encoder,
+                  "assistant",
                   token
                 )
               );
@@ -134,11 +191,17 @@ export async function POST(
             );
 
             controller.enqueue(
-              encoder.encode(
-                "\n\n❌ Internal Server Error."
+              encodeEvent(
+                encoder,
+                "system",
+                error instanceof Error
+                  ? error.message
+                  : "Internal Server Error."
               )
             );
           } finally {
+            unsubscribe();
+
             controller.close();
           }
         },
@@ -149,11 +212,16 @@ export async function POST(
       {
         headers: {
           "Content-Type":
-            "text/plain; charset=utf-8",
+            "application/x-ndjson",
+
           "Cache-Control":
             "no-cache",
+
           Connection:
             "keep-alive",
+
+          "X-Accel-Buffering":
+            "no",
         },
       }
     );
@@ -163,6 +231,7 @@ export async function POST(
     return Response.json(
       {
         success: false,
+
         error:
           "Invalid request.",
       },
